@@ -619,102 +619,128 @@ class NotionBackend(FolioBackend):
         updated_since: str | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
-        """Search notes using Notion's search API + database filters.
+        """Search notes using Notion's database query + client-side content matching.
 
-        Strategy: Use Notion's search for content matching, then apply
-        tag/folder/time filters locally on the results. This minimizes
-        API calls while still supporting all filter combinations.
+        Notion's API cannot search inside page block content.
+        This flow implements property-first filtering followed by
+        client-side full-text matching.
         """
-        # Step 1: Content search via Notion search API
-        search_response = self.client.search(
-            query=query,
-            filter={"property": "object", "value": "page"},
-            sort={
-                "direction": "descending",
-                "timestamp": "last_edited_time",
-            },
-            page_size=100,  # fetch more than limit to allow for filtering
-        )
+        # 1. Build Property Filters
+        and_filters = []
+        if tags:
+            for tag in tags:
+                and_filters.append({
+                    "property": "tags",
+                    "multi_select": {"contains": tag}
+                })
+        if folder:
+            and_filters.append({
+                "property": "folder",
+                "rich_text": {"equals": folder.rstrip("/")}
+            })
 
-        # Step 2: Filter to only pages in our database
-        our_db = self.database_id.replace("-", "")
-        candidates: list[dict] = []
+        filter_obj = None
+        if and_filters:
+            filter_obj = {"and": and_filters} if len(and_filters) > 1 else and_filters[0]
 
-        for page in search_response.get("results", []):
+        # 2. Query Database
+        # If query is provided but no tags/folder, limit to 50 pages to avoid hammering API.
+        # Otherwise, 100 is a reasonable default page size.
+        fetch_limit = 50 if (query and not and_filters) else 100
+
+        body: dict[str, Any] = {"page_size": fetch_limit}
+        if filter_obj:
+            body["filter"] = filter_obj
+
+        # Default sort by last edited descending for relevance
+        body["sorts"] = [{"timestamp": "last_edited_time", "direction": "descending"}]
+
+        try:
+            response = self.client.request(
+                path=f"data_sources/{self.data_source_id}/query",
+                method="POST",
+                body=body,
+            )
+        except APIResponseError as e:
+            raise RuntimeError(f"Search query failed: {str(e)}")
+
+        pages = response.get("results", [])
+        cutoff = _parse_since(updated_since) if updated_since else None
+        results: list[SearchResult] = []
+
+        # 3. Process results & Content Match
+        query_lower = query.lower() if query else None
+
+        for page in pages:
             if page.get("archived"):
-                continue
-
-            # Check page belongs to our database
-            parent = page.get("parent", {})
-            parent_db = parent.get("database_id", "").replace("-", "")
-            if parent_db != our_db:
                 continue
 
             path = self._get_path(page)
             if not path:
                 continue
 
-            candidates.append(page)
-
-        # Step 3: Apply local filters
-        cutoff = _parse_since(updated_since) if updated_since else None
-        results: list[SearchResult] = []
-
-        for page in candidates:
-            path = self._get_path(page)
+            title = self._get_title_from_page(page)
             page_tags = self._get_tags_from_page(page)
             _, updated = self._get_timestamps(page)
-            title = self._get_title_from_page(page)
 
-            # --- Tag filter (must have ALL specified tags) ---
-            if tags:
-                page_tags_lower = [t.lower() for t in page_tags]
-                if not all(t.lower() in page_tags_lower for t in tags):
-                    continue
-
-            # --- Folder filter ---
-            if folder:
-                if not path.startswith(folder.rstrip("/") + "/"):
-                    continue
-
-            # --- Time filter ---
+            # Local time filter
             if cutoff and updated < cutoff:
                 continue
 
-            # --- Build snippet (first ~150 chars of content) ---
-            # We avoid fetching full content for every result.
-            # Use title + path as the snippet for now.
-            snippet = f"{title} ({path})"
+            content_text = ""
+            snippet = ""
+            score = 0.0
 
-            # --- Score ---
-            # Notion's search already ranks by relevance.
-            # We use position in results as a proxy score.
-            position_score = 1.0 - (len(results) * 0.05)
+            if query_lower:
+                # Full-text content matching (client-side)
+                # Fetching blocks for EVERY candidate page is slow but necessary for accuracy.
+                blocks = self._fetch_all_blocks(page["id"])
+                content_text = _blocks_to_plain(blocks)
 
-            # Title match bonus
-            query_lower = query.lower()
-            if query_lower in title.lower():
-                position_score += 2.0
+                title_match = query_lower in title.lower()
+                content_match_idx = content_text.lower().find(query_lower)
+
+                if not title_match and content_match_idx == -1:
+                    continue
+
+                # Scoring
+                score = 1.0 if title_match else 0.5
+                if title_match and content_match_idx != -1:
+                    score = 1.5
+
+                # Snippet generation (~100 char window)
+                if content_match_idx != -1:
+                    start = max(0, content_match_idx - 50)
+                    end = min(len(content_text), content_match_idx + 50)
+                    snippet = content_text[start:end].replace("\n", " ").strip()
+                    if start > 0: snippet = "..." + snippet
+                    if end < len(content_text): snippet = snippet + "..."
+                else:
+                    snippet = (content_text[:100].replace("\n", " ").strip() + "...") if content_text else title
+            else:
+                # No query, just property filters
+                snippet = title
+                score = 1.0
 
             summary = NoteSummary(
                 path=path,
                 title=title,
                 tags=page_tags,
                 updated=updated,
-                size_tokens=0,
-                has_previous=False,
+                size_tokens=len(content_text) // 4,
             )
 
             results.append(SearchResult(
                 note=summary,
                 snippet=snippet,
-                score=max(position_score, 0.1),
+                score=score
             ))
 
-            if len(results) >= limit:
+            # Stop early if no query and we hit the limit
+            if not query_lower and len(results) >= limit:
                 break
 
-        # Step 4: Sort
+        # 4. Final Sort & Limit
         if sort == "recent":
             results.sort(key=lambda r: r.note.updated, reverse=True)
         else:
@@ -1085,3 +1111,14 @@ def _rt_to_md(rich_text: list[dict]) -> str:
 def _rt_to_plain(rich_text: list[dict]) -> str:
     """Extract plain text from rich_text (no formatting)."""
     return "".join(seg.get("text", {}).get("content", "") for seg in rich_text)
+
+
+def _blocks_to_plain(blocks: list[dict]) -> str:
+    """Convert Notion blocks to a single plain text string for searching."""
+    text_parts = []
+    for block in blocks:
+        btype = block.get("type", "")
+        data = block.get(btype, {})
+        if "rich_text" in data:
+            text_parts.append(_rt_to_plain(data["rich_text"]))
+    return "\n".join(text_parts)
