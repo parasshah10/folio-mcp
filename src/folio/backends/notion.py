@@ -328,39 +328,34 @@ class NotionBackend(FolioBackend):
     def update(
         self,
         path: str,
-        content: str,
+        content: str | None,                    # ← was: str
         mode: str = "replace",
         target: str | None = None,
         tags: list[str] | None = None,
     ) -> Note:
         page_id = self._resolve_page_id(path)
 
-        # Fetch current state
         try:
             page = self.client.pages.retrieve(page_id)
         except APIResponseError:
             self._cache.pop(path, None)
             raise FileNotFoundError(f"Note not found: {path}")
 
-        match mode:
-            case "replace":
-                # Rewrite all blocks
-                self._write_page_content(page_id, content)
+        # --- Content update (skip if None → retag only) ---
+        if content is not None:                  # ← wrap the whole block
+            match mode:
+                case "replace":
+                    self._write_page_content(page_id, content)
+                case "append":
+                    self._append_page_content(page_id, content)
+                case "section":
+                    current_md = self._read_page_content(page_id)
+                    new_md = replace_section(current_md, target, content)
+                    self._write_page_content(page_id, new_md)
+                case _:
+                    raise ValueError(f"Invalid mode: {mode}")
 
-            case "append":
-                # Add new blocks at the end
-                self._append_page_content(page_id, content)
-
-            case "section":
-                # Read current content, replace section, rewrite
-                current_md = self._read_page_content(page_id)
-                new_md = replace_section(current_md, target, content)
-                self._write_page_content(page_id, new_md)
-
-            case _:
-                raise ValueError(f"Invalid mode: {mode}")
-
-        # Update tags if provided
+        # --- Tag update ---
         if tags is not None:
             self.client.pages.update(
                 page_id=page_id,
@@ -371,7 +366,6 @@ class NotionBackend(FolioBackend):
                 },
             )
 
-        # Re-fetch to get updated timestamps
         page = self.client.pages.retrieve(page_id)
         return self._page_to_note(page)
 
