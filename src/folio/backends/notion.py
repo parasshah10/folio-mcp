@@ -371,10 +371,14 @@ class NotionBackend(FolioBackend):
         # Create page with properties (no content yet)
         properties = self._build_properties(note)
         page = self.client.pages.create(
-            parent={"data_source_id": self.data_source_id},
+            parent={"database_id": self.database_id},
             properties=properties,
         )
         page_id = page["id"]
+        
+        # Log the URL so the user can find the page immediately
+        import sys
+        print(f"\n[folio] CREATED PAGE: {page.get('url')}\n", file=sys.stderr)
 
         # Append content as blocks
         if note.content:

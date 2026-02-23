@@ -86,8 +86,8 @@ def folio(
     destination: Annotated[Optional[str], Field(
         description="New path for action='move'"
     )] = None,
-    tags: Annotated[Optional[List[str]], Field(
-        description="Tags for organization. Used with create and update."
+    tags: Annotated[Optional[Any], Field(
+        description="Tags for organization. Used with create and update. Can be a list or comma-separated string."
     )] = None,
     folder: Annotated[Optional[str], Field(
         description="Folder to list. Only used with action='list'."
@@ -112,6 +112,10 @@ def folio(
         List:    action='list', folder='journal'
     """
     try:
+        # Normalize tags
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        
         match action:
             # ------ CREATE ------
             case "create":

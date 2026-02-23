@@ -265,7 +265,15 @@ class LocalBackend(FolioBackend):
             raise FileExistsError(f"Target already exists: {target}")
 
         tgt_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src_path), str(tgt_path))
+        
+        if self._repo and self.git_enabled:
+            try:
+                # Use git mv to preserve history
+                self._repo.git.mv(str(src_path.relative_to(self.root)), str(tgt_path.relative_to(self.root)))
+            except Exception:
+                shutil.move(str(src_path), str(tgt_path))
+        else:
+            shutil.move(str(src_path), str(tgt_path))
 
         # Clean empty source dirs
         parent = src_path.parent
