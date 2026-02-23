@@ -619,20 +619,27 @@ class NotionBackend(FolioBackend):
         updated_since: str | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
-        """Search notes using Notion's database query + client-side content matching.
+        """Search notes by title, tags, folder, and time.
 
-        Notion's API cannot search inside page block content.
-        This flow implements property-first filtering followed by
-        client-side full-text matching.
+        Uses Notion's databases.query() with property filters only.
+        No client-side content matching — every search is a single API call.
         """
         # 1. Build Property Filters
         and_filters = []
+
+        if query:
+            and_filters.append({
+                "property": "title",
+                "title": {"contains": query}
+            })
+
         if tags:
             for tag in tags:
                 and_filters.append({
                     "property": "tags",
                     "multi_select": {"contains": tag}
                 })
+
         if folder:
             and_filters.append({
                 "property": "folder",
@@ -643,17 +650,15 @@ class NotionBackend(FolioBackend):
         if and_filters:
             filter_obj = {"and": and_filters} if len(and_filters) > 1 else and_filters[0]
 
-        # 2. Query Database
-        # If query is provided but no tags/folder, limit to 50 pages to avoid hammering API.
-        # Otherwise, 100 is a reasonable default page size.
-        fetch_limit = 50 if (query and not and_filters) else 100
-
-        body: dict[str, Any] = {"page_size": fetch_limit}
+        # 2. Query Database (single API call)
+        body: dict[str, Any] = {"page_size": min(limit * 2, 100)}
         if filter_obj:
             body["filter"] = filter_obj
 
-        # Default sort by last edited descending for relevance
-        body["sorts"] = [{"timestamp": "last_edited_time", "direction": "descending"}]
+        if sort == "recent":
+            body["sorts"] = [{"timestamp": "last_edited_time", "direction": "descending"}]
+        else:
+            body["sorts"] = [{"timestamp": "last_edited_time", "direction": "descending"}]
 
         try:
             response = self.client.request(
@@ -668,9 +673,7 @@ class NotionBackend(FolioBackend):
         cutoff = _parse_since(updated_since) if updated_since else None
         results: list[SearchResult] = []
 
-        # 3. Process results & Content Match
-        query_lower = query.lower() if query else None
-
+        # 3. Process results
         for page in pages:
             if page.get("archived"):
                 continue
@@ -683,70 +686,27 @@ class NotionBackend(FolioBackend):
             page_tags = self._get_tags_from_page(page)
             _, updated = self._get_timestamps(page)
 
-            # Local time filter
             if cutoff and updated < cutoff:
                 continue
-
-            content_text = ""
-            snippet = ""
-            score = 0.0
-
-            if query_lower:
-                # Full-text content matching (client-side)
-                # Fetching blocks for EVERY candidate page is slow but necessary for accuracy.
-                blocks = self._fetch_all_blocks(page["id"])
-                content_text = _blocks_to_plain(blocks)
-
-                title_match = query_lower in title.lower()
-                content_match_idx = content_text.lower().find(query_lower)
-
-                if not title_match and content_match_idx == -1:
-                    continue
-
-                # Scoring
-                score = 1.0 if title_match else 0.5
-                if title_match and content_match_idx != -1:
-                    score = 1.5
-
-                # Snippet generation (~100 char window)
-                if content_match_idx != -1:
-                    start = max(0, content_match_idx - 50)
-                    end = min(len(content_text), content_match_idx + 50)
-                    snippet = content_text[start:end].replace("\n", " ").strip()
-                    if start > 0: snippet = "..." + snippet
-                    if end < len(content_text): snippet = snippet + "..."
-                else:
-                    snippet = (content_text[:100].replace("\n", " ").strip() + "...") if content_text else title
-            else:
-                # No query, just property filters
-                snippet = title
-                score = 1.0
 
             summary = NoteSummary(
                 path=path,
                 title=title,
                 tags=page_tags,
                 updated=updated,
-                size_tokens=len(content_text) // 4,
+                size_tokens=0,
             )
 
             results.append(SearchResult(
                 note=summary,
-                snippet=snippet,
-                score=score
+                snippet=title,
+                score=1.0,
             ))
 
-            # Stop early if no query and we hit the limit
-            if not query_lower and len(results) >= limit:
+            if len(results) >= limit:
                 break
 
-        # 4. Final Sort & Limit
-        if sort == "recent":
-            results.sort(key=lambda r: r.note.updated, reverse=True)
-        else:
-            results.sort(key=lambda r: r.score, reverse=True)
-
-        return results[:limit]
+        return results
 
     # ------------------------------------------------------------------
     # Undo
