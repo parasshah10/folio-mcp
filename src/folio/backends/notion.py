@@ -1,7 +1,7 @@
 """Notion backend — cloud-hosted notes via Notion API.
 
 Single-database approach: all notes live in one Notion database.
-Folders are a 'folder' select property. Paths are a 'folio_path' text property.
+Folders are a 'folder' rich_text property. Paths are a 'folio_path' text property.
 The path→page_id mapping is bulk-loaded on startup (1 API call per 100 notes)
 and kept in sync via an in-memory cache.
 """
@@ -54,7 +54,7 @@ class NotionBackend(FolioBackend):
         if "folio_path" not in props:
             updates["folio_path"] = {"rich_text": {}}
         if "folder" not in props:
-            updates["folder"] = {"select": {}}
+            updates["folder"] = {"rich_text": {}}
         if "tags" not in props:
             updates["tags"] = {"multi_select": {}}
 
@@ -136,6 +136,14 @@ class NotionBackend(FolioBackend):
             return rich_text[0].get("plain_text", "")
         return None
 
+    def _get_folder(self, page: dict) -> str:
+        """Extract folder from a page object."""
+        prop = page.get("properties", {}).get("folder", {})
+        rich_text = prop.get("rich_text", [])
+        if rich_text:
+            return rich_text[0].get("plain_text", "")
+        return ""
+
     def _get_title_from_page(self, page: dict) -> str:
         """Extract title from a page object (handles any title property name)."""
         for key, prop in page.get("properties", {}).items():
@@ -187,7 +195,7 @@ class NotionBackend(FolioBackend):
 
         # Only set folder if there is one (avoid empty select)
         if folder:
-            props["folder"] = {"select": {"name": folder}}
+            props["folder"] = {"rich_text": [{"text": {"content": folder}}]}
 
         return props
 
@@ -423,10 +431,10 @@ class NotionBackend(FolioBackend):
         }
 
         if new_folder:
-            props["folder"] = {"select": {"name": new_folder}}
+            props["folder"] = {"rich_text": [{"text": {"content": new_folder}}]}
         else:
-            # Clear folder — set to empty by removing the select
-            props["folder"] = {"select": None}
+            # Clear folder
+            props["folder"] = {"rich_text": []}
 
         try:
             self.client.pages.update(
@@ -468,7 +476,7 @@ class NotionBackend(FolioBackend):
         if folder:
             body["filter"] = {
                 "property": "folder",
-                "select": {"equals": folder.rstrip("/")},
+                "rich_text": {"equals": folder.rstrip("/")},
             }
 
         summaries: list[NoteSummary] = []
