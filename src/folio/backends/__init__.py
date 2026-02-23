@@ -1,4 +1,3 @@
-```python
 """Backend interface and factory."""
 
 from __future__ import annotations
@@ -71,5 +70,3 @@ def get_backend(config: "FolioConfig") -> FolioBackend:
             return NotionBackend(config.notion)
         case _:
             raise ValueError(f"Unknown backend: {config.backend}")
-
-```
