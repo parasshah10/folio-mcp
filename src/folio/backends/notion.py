@@ -326,10 +326,10 @@ class NotionBackend(FolioBackend):
             end_idx = len(all_blocks)
 
         # Blocks to delete
-        to_delete = [b["id"] for b in all_blocks[start_idx:end_idx]]
+        to_delete = [b["id"] for b in all_blocks[start_idx + 1:end_idx]]
         
         # Block BEFORE the section (if any)
-        after_id = all_blocks[start_idx - 1]["id"] if start_idx > 0 else None
+        after_id = all_blocks[start_idx]["id"]
         
         # 1. Delete the blocks
         self._delete_blocks(to_delete)
