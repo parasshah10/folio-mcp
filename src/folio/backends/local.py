@@ -137,7 +137,7 @@ class LocalBackend(FolioBackend):
         for k, v in note.metadata.items():
             post.metadata[k] = v
 
-        with open(filepath, "w", encoding="utf-8") as f:
+        with open(filepath, "wb") as f:
             frontmatter.dump(post, f)
 
         # Update search index

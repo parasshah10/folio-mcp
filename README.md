@@ -40,7 +40,11 @@ FOLIO_LOCAL_ROOT=~/folio-notes
 ### 3. Run
 
 ```bash
-python -m folio_mcp
+# Using the installed script
+folio-mcp
+
+# Or using python directly
+python -m folio
 ```
 
 ### 4. Connect to your AI
@@ -51,8 +55,7 @@ Add to your MCP client config (e.g. Claude Desktop, Cursor, etc.):
 {
   "mcpServers": {
     "folio": {
-      "command": "python",
-      "args": ["-m", "folio_mcp"],
+      "command": "folio-mcp",
       "env": {
         "FOLIO_BACKEND": "local",
         "FOLIO_LOCAL_ROOT": "/Users/you/folio-notes"

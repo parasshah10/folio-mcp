@@ -96,4 +96,4 @@ class FolioConfig(BaseModel):
                 errors.append(f"Parent directory does not exist: {root.parent}")
         elif self.backend not in ("local", "notion"):
             errors.append(f"Unknown backend: {self.backend}. Use 'local' or 'notion'.")
-        return errorsconfig.py
+        return errors
