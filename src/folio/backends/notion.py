@@ -44,7 +44,7 @@ class NotionBackend(FolioBackend):
             db = self.client.databases.retrieve(self.database_id)
         except APIResponseError as e:
             raise ConnectionError(
-                f"Cannot access Notion database: {e.message}. "
+                f"Cannot access Notion database: {str(e)}. "
                 "Check NOTION_DATABASE_ID and that the integration has access."
             )
 
@@ -74,10 +74,14 @@ class NotionBackend(FolioBackend):
         cursor = None
 
         while True:
-            response = self.client.databases.query(
-                database_id=self.database_id,
-                start_cursor=cursor,
-                page_size=100,
+            body: dict[str, Any] = {"page_size": 100}
+            if cursor:
+                body["start_cursor"] = cursor
+
+            response = self.client.request(
+                path=f"databases/{self.database_id}/query",
+                method="POST",
+                body=body,
             )
 
             for page in response["results"]:
@@ -101,11 +105,14 @@ class NotionBackend(FolioBackend):
             return self._cache[path]
 
         # Cache miss — maybe created externally in Notion UI
-        response = self.client.databases.query(
-            database_id=self.database_id,
-            filter={
-                "property": "folio_path",
-                "rich_text": {"equals": path},
+        response = self.client.request(
+            path=f"databases/{self.database_id}/query",
+            method="POST",
+            body={
+                "filter": {
+                    "property": "folio_path",
+                    "rich_text": {"equals": path},
+                },
             },
         )
 
@@ -386,7 +393,7 @@ class NotionBackend(FolioBackend):
                 archived=True,
             )
         except APIResponseError as e:
-            raise RuntimeError(f"Failed to delete: {e.message}")
+            raise RuntimeError(f"Failed to delete: {str(e)}")
 
         # Remove from cache
         self._cache.pop(path, None)
@@ -427,7 +434,7 @@ class NotionBackend(FolioBackend):
                 properties=props,
             )
         except APIResponseError as e:
-            raise RuntimeError(f"Failed to move: {e.message}")
+            raise RuntimeError(f"Failed to move: {str(e)}")
 
         # Update cache: remove old, add new
         self._cache.pop(source, None)
@@ -447,8 +454,7 @@ class NotionBackend(FolioBackend):
         Uses a database query with filter (not the cache) so we get
         fresh data including titles, tags, and timestamps.
         """
-        query_args: dict[str, Any] = {
-            "database_id": self.database_id,
+        body: dict[str, Any] = {
             "page_size": 100,
             "sorts": [
                 {
@@ -460,7 +466,7 @@ class NotionBackend(FolioBackend):
 
         # Folder filter
         if folder:
-            query_args["filter"] = {
+            body["filter"] = {
                 "property": "folder",
                 "select": {"equals": folder.rstrip("/")},
             }
@@ -470,9 +476,13 @@ class NotionBackend(FolioBackend):
 
         while True:
             if cursor:
-                query_args["start_cursor"] = cursor
+                body["start_cursor"] = cursor
 
-            response = self.client.databases.query(**query_args)
+            response = self.client.request(
+                path=f"databases/{self.database_id}/query",
+                method="POST",
+                body=body,
+            )
 
             for page in response["results"]:
                 if page.get("archived"):
@@ -651,10 +661,14 @@ class NotionBackend(FolioBackend):
         cursor = None
 
         while True:
-            response = self.client.databases.query(
-                database_id=self.database_id,
-                start_cursor=cursor,
-                page_size=100,
+            body: dict[str, Any] = {"page_size": 100}
+            if cursor:
+                body["start_cursor"] = cursor
+
+            response = self.client.request(
+                path=f"databases/{self.database_id}/query",
+                method="POST",
+                body=body,
             )
 
             for page in response["results"]:
