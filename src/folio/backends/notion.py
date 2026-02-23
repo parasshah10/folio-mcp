@@ -30,6 +30,7 @@ class NotionBackend(FolioBackend):
             notion_version="2025-09-03"
         )
         self.database_id = config.database_id
+        self.data_source_id: str | None = None
         self._cache: dict[str, str] = {}  # path → page_id
         self._ensure_schema()
         self._load_cache()
@@ -39,12 +40,18 @@ class NotionBackend(FolioBackend):
     # ------------------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        """Verify the data source has required properties, create if missing."""
+        """Verify the database has required properties, create if missing."""
         try:
-            db = self.client.data_sources.retrieve(self.database_id)
+            db = self.client.databases.retrieve(self.database_id)
+            # Find the primary data source ID
+            if "data_sources" in db and db["data_sources"]:
+                self.data_source_id = db["data_sources"][0]["id"]
+            else:
+                # Fallback to database_id if no data_sources (standard database)
+                self.data_source_id = self.database_id
         except APIResponseError as e:
             raise ConnectionError(
-                f"Cannot access Notion data source: {str(e)}. "
+                f"Cannot access Notion database: {str(e)}. "
                 "Check NOTION_DATABASE_ID and that the integration has access."
             )
 
@@ -59,8 +66,8 @@ class NotionBackend(FolioBackend):
             updates["tags"] = {"multi_select": {}}
 
         if updates:
-            self.client.data_sources.update(
-                data_source_id=self.database_id,
+            self.client.databases.update(
+                database_id=self.database_id,
                 properties=updates,
             )
 
@@ -79,7 +86,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"data_sources/{self.database_id}/query",
+                path=f"data_sources/{self.data_source_id}/query",
                 method="POST",
                 body=body,
             )
@@ -106,7 +113,7 @@ class NotionBackend(FolioBackend):
 
         # Cache miss — maybe created externally in Notion UI
         response = self.client.request(
-            path=f"data_sources/{self.database_id}/query",
+            path=f"data_sources/{self.data_source_id}/query",
             method="POST",
             body={
                 "filter": {
@@ -216,9 +223,6 @@ class NotionBackend(FolioBackend):
             )
             active_blocks = []
             for b in response["results"]:
-                text = _rt_to_plain(b.get(b["type"], {}).get("rich_text", []))
-                import sys
-                print(f"[debug] Block: id={b['id']}, type={b['type']}, archived={b.get('archived')}, text='{text}'", file=sys.stderr)
                 if not b.get("archived") and not b.get("in_trash"):
                     active_blocks.append(b)
             blocks.extend(active_blocks)
@@ -367,7 +371,7 @@ class NotionBackend(FolioBackend):
         # Create page with properties (no content yet)
         properties = self._build_properties(note)
         page = self.client.pages.create(
-            parent={"data_source_id": self.database_id},
+            parent={"data_source_id": self.data_source_id},
             properties=properties,
         )
         page_id = page["id"]
@@ -563,7 +567,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"data_sources/{self.database_id}/query",
+                path=f"data_sources/{self.data_source_id}/query",
                 method="POST",
                 body=body,
             )
@@ -750,7 +754,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"data_sources/{self.database_id}/query",
+                path=f"data_sources/{self.data_source_id}/query",
                 method="POST",
                 body=body,
             )
