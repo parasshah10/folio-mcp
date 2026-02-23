@@ -16,14 +16,13 @@ notes — in markdown, organized in folders, with tags. Folio gives it exactly t
 
 ### 1. Install
 
-\`\`\`bash
+```bash
 git clone https://github.com/yourname/folio-mcp.git
 cd folio-mcp
 pip install -e .
-
 ```
 
-### 2\. Configure
+### 2. Configure
 
 Create a `.env` file:
 
@@ -36,17 +35,15 @@ FOLIO_LOCAL_ROOT=~/folio-notes
 # FOLIO_BACKEND=notion
 # NOTION_API_KEY=ntn_...
 # NOTION_DATABASE_ID=abc123...
-
 ```
 
-### 3\. Run
+### 3. Run
 
 ```bash
 python -m folio_mcp
-
 ```
 
-### 4\. Connect to your AI
+### 4. Connect to your AI
 
 Add to your MCP client config (e.g. Claude Desktop, Cursor, etc.):
 
@@ -63,13 +60,12 @@ Add to your MCP client config (e.g. Claude Desktop, Cursor, etc.):
     }
   }
 }
-
 ```
 
 ## Configuration
 
 | Variable | Required | Default | Description |
-| --- | --- | --- | --- |
+|----------|----------|---------|-------------|
 | `FOLIO_BACKEND` | No | `local` | Backend: `local` or `notion` |
 | `FOLIO_LOCAL_ROOT` | Local | `./notes` | Directory for local markdown files |
 | `NOTION_API_KEY` | Notion | — | Notion integration token |
@@ -80,7 +76,7 @@ Add to your MCP client config (e.g. Claude Desktop, Cursor, etc.):
 ### `folio` — Read and write notes
 
 | Action | What it does |
-| --- | --- |
+|--------|--------------|
 | `create` | New note with path, content, tags |
 | `read` | Get a note (optionally just one section) |
 | `update` | Modify content — replace, append, or update one section |
@@ -90,20 +86,20 @@ Add to your MCP client config (e.g. Claude Desktop, Cursor, etc.):
 | `undo` | Revert to previous version (local only) |
 
 Update modes:
-*   **replace** — rewrite the entire note
-*   **append** — add to the end without touching existing content
-*   **section** — rewrite under one heading, leave everything else
+
+- **replace** — rewrite the entire note
+- **append** — add to the end without touching existing content
+- **section** — rewrite under one heading, leave everything else
 
 ### `folio_search` — Find notes
 
 Search by content, tags, folder, or recency. Results ranked by relevance with content snippets.
 
-```
+```python
 folio_search("cycling routes")
 folio_search("birthday", tags=["person"])
 folio_search("", tags=["pinned"])
 folio_search("illustration", updated_since="7d", sort="recent")
-
 ```
 
 ## Project Structure
@@ -119,7 +115,6 @@ folio_mcp/
     ├── __init__.py      # Backend interface + factory
     ├── local.py         # Local filesystem + git versioning
     └── notion.py        # Notion API backend
-
 ```
 
 ## Backends
@@ -138,7 +133,6 @@ Notes stored as markdown files in `FOLIO_LOCAL_ROOT`. Metadata (tags, timestamps
 │       └── plans.md
 └── projects/
     └── companion.md
-
 ```
 
 ### Notion
@@ -147,10 +141,10 @@ Notes stored as pages in a Notion database. Tags via multi-select property, fold
 
 **Setup:**
 
-1.  Create a [Notion integration](https://www.notion.so/my-integrations "https://www.notion.so/my-integrations")
-2.  Create a database with properties: `title` (title), `tags` (multi-select), `folder` (rich text)
-3.  Share the database with your integration
-4.  Set `NOTION_API_KEY` and `NOTION_DATABASE_ID`
+1. Create a [Notion integration](https://www.notion.so/my-integrations)
+2. Create a database with properties: `title` (title), `tags` (multi-select), `folder` (rich text)
+3. Share the database with your integration
+4. Set `NOTION_API_KEY` and `NOTION_DATABASE_ID`
 
 ## License
 
