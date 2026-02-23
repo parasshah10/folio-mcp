@@ -102,7 +102,7 @@ def folio(
     Examples:
         Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
                  content='# Sunday\\n## Morning\\nCycled in -6°C...\\n## Evening\\n...'
-        Read section:  action='read', path='people/him❤️/plans.md', section='Weekend Cabin Trip'
+        Read section:  action='read', path='plans/cabin-weekend.md', section='Weekend Cabin Trip'
         Append:  action='update', path='watching/watchlist.md', mode='append',
                  content='\\n- The Terror S1 — slow-burn arctic horror'
         Section: action='update', path='projects/companion.md', mode='section',
