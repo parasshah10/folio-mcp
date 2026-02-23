@@ -86,6 +86,9 @@ def folio(
     destination: Annotated[Optional[str], Field(
         description="New path for action='move'"
     )] = None,
+    destination: Annotated[Optional[str], Field(
+        description="New path for action='move'"
+    )] = None,
     tags: Annotated[Optional[List[str]], Field(
         description="Tags for organization. Used with create and update."
     )] = None,
@@ -139,8 +142,10 @@ def folio(
                     return {"error": f"Invalid mode: {update_mode}. Use replace, append, or section."}
                 if update_mode == "section" and not target:
                     return {"error": "target (heading name) is required for section mode"}
-                if content is None:
-                    return {"error": "content is required for update"}
+                if content is None and tags is None:
+                    return {"error": "content or tags required for update"}
+                if update_mode == "section" and content is None:
+                    return {"error": "content is required for section mode"}
                 result = backend.update(
                     path=path,
                     content=content,
@@ -149,7 +154,7 @@ def folio(
                     tags=tags,
                 )
                 return _note_response(result, status="updated")
-
+                
             # ------ DELETE ------
             case "delete":
                 if not path:
@@ -161,9 +166,9 @@ def folio(
             case "move":
                 if not path:
                     return {"error": "path is required for move"}
-                if not target:
-                    return {"error": "target path is required for move"}
-                result = backend.move(source=path, target=target)
+                if not destination:
+                    return {"error": "destination is required for move"}
+                result = backend.move(source=path, target=destination)
                 return _note_response(result, status="moved")
 
             # ------ LIST ------
