@@ -30,9 +30,16 @@ class Note(BaseModel):
         default_factory=dict, description="Extension fields for future use"
     )
 
+    def __init__(self, **data):
+        if "content" in data and isinstance(data["content"], str):
+            data["content"] = data["content"].replace("\\n", "\n")
+        super().__init__(**data)
+
     @property
     def title(self) -> str:
-        """Derive title from first H1 heading, fall back to filename."""
+        """Derive title from metadata, first H1 heading, or filename."""
+        if "title" in self.metadata:
+            return self.metadata["title"]
         for line in self.content.split("\n"):
             stripped = line.strip()
             if stripped.startswith("# ") and not stripped.startswith("## "):

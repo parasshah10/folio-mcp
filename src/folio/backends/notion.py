@@ -27,7 +27,7 @@ class NotionBackend(FolioBackend):
     def __init__(self, config: NotionConfig):
         self.client = NotionClient(
             auth=config.api_key,
-            notion_version="2022-06-28"
+            notion_version="2025-09-03"
         )
         self.database_id = config.database_id
         self._cache: dict[str, str] = {}  # path → page_id
@@ -39,12 +39,12 @@ class NotionBackend(FolioBackend):
     # ------------------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        """Verify the database has required properties, create if missing."""
+        """Verify the data source has required properties, create if missing."""
         try:
-            db = self.client.databases.retrieve(self.database_id)
+            db = self.client.data_sources.retrieve(self.database_id)
         except APIResponseError as e:
             raise ConnectionError(
-                f"Cannot access Notion database: {str(e)}. "
+                f"Cannot access Notion data source: {str(e)}. "
                 "Check NOTION_DATABASE_ID and that the integration has access."
             )
 
@@ -59,8 +59,8 @@ class NotionBackend(FolioBackend):
             updates["tags"] = {"multi_select": {}}
 
         if updates:
-            self.client.databases.update(
-                database_id=self.database_id,
+            self.client.data_sources.update(
+                data_source_id=self.database_id,
                 properties=updates,
             )
 
@@ -79,7 +79,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"databases/{self.database_id}/query",
+                path=f"data_sources/{self.database_id}/query",
                 method="POST",
                 body=body,
             )
@@ -106,7 +106,7 @@ class NotionBackend(FolioBackend):
 
         # Cache miss — maybe created externally in Notion UI
         response = self.client.request(
-            path=f"databases/{self.database_id}/query",
+            path=f"data_sources/{self.database_id}/query",
             method="POST",
             body={
                 "filter": {
@@ -203,8 +203,8 @@ class NotionBackend(FolioBackend):
     # Page content I/O
     # ------------------------------------------------------------------
 
-    def _read_page_content(self, page_id: str) -> str:
-        """Read all blocks from a page, convert to markdown."""
+    def _fetch_all_blocks(self, page_id: str) -> list[dict]:
+        """Fetch all block objects for a page, skipping archived ones."""
         blocks: list[dict] = []
         cursor = None
 
@@ -214,62 +214,138 @@ class NotionBackend(FolioBackend):
                 start_cursor=cursor,
                 page_size=100,
             )
-            blocks.extend(response["results"])
+            active_blocks = []
+            for b in response["results"]:
+                text = _rt_to_plain(b.get(b["type"], {}).get("rich_text", []))
+                import sys
+                print(f"[debug] Block: id={b['id']}, type={b['type']}, archived={b.get('archived')}, text='{text}'", file=sys.stderr)
+                if not b.get("archived") and not b.get("in_trash"):
+                    active_blocks.append(b)
+            blocks.extend(active_blocks)
 
             if not response.get("has_more"):
                 break
             cursor = response.get("next_cursor")
 
+        return blocks
+
+    def _read_page_content(self, page_id: str) -> str:
+        """Read all blocks from a page, convert to markdown."""
+        blocks = self._fetch_all_blocks(page_id)
         return _blocks_to_markdown(blocks)
 
     def _write_page_content(self, page_id: str, markdown: str) -> None:
         """Replace all page content with new markdown."""
         self._clear_page_blocks(page_id)
-        blocks = _markdown_to_blocks(markdown)
-        if blocks:
-            self._append_blocks(page_id, blocks)
+        if markdown:
+            content = markdown.replace("\\n", "\n")
+            blocks = _markdown_to_blocks(content)
+            if blocks:
+                self._append_blocks(page_id, blocks)
 
     def _append_page_content(self, page_id: str, markdown: str) -> None:
         """Append markdown as new blocks at end of page."""
-        blocks = _markdown_to_blocks(markdown)
-        if blocks:
-            self._append_blocks(page_id, blocks)
+        if markdown:
+            content = markdown.replace("\\n", "\n")
+            blocks = _markdown_to_blocks(content)
+            if blocks:
+                self._append_blocks(page_id, blocks)
 
     def _clear_page_blocks(self, page_id: str) -> None:
         """Delete all blocks from a page."""
-        cursor = None
-        while True:
-            response = self.client.blocks.children.list(
-                block_id=page_id,
-                start_cursor=cursor,
-                page_size=100,
-            )
-            for block in response["results"]:
-                try:
-                    self.client.blocks.delete(block_id=block["id"])
-                except APIResponseError:
-                    pass
-            if not response.get("has_more"):
-                break
-            cursor = response.get("next_cursor")
+        blocks = self._fetch_all_blocks(page_id)
+        self._delete_blocks([b["id"] for b in blocks])
+
+    def _delete_blocks(self, block_ids: list[str]) -> None:
+        """Delete specific blocks one-by-one."""
+        for block_id in block_ids:
+            try:
+                self.client.request(
+                    path=f"blocks/{block_id}",
+                    method="DELETE"
+                )
+            except APIResponseError as e:
+                raise RuntimeError(f"Failed to delete block {block_id}: {str(e)}")
+
+    def _insert_blocks(self, parent_id: str, blocks: list[dict], after_id: str | None = None) -> None:
+        """Insert blocks after a specific block ID, or at end if None."""
+        for i in range(0, len(blocks), 100):
+            batch = blocks[i : i + 100]
+            kwargs: dict[str, Any] = {
+                "block_id": parent_id,
+                "children": batch,
+            }
+            if after_id:
+                kwargs["position"] = {
+                    "type": "after_block",
+                    "after_block": {"id": after_id}
+                }
+            
+            resp = self.client.blocks.children.append(**kwargs)
+            
+            # Update after_id to the LAST block of the batch for sequential insertion
+            if i + 100 < len(blocks) and resp.get("results"):
+                after_id = resp["results"][-1]["id"]
 
     def _append_blocks(self, page_id: str, blocks: list[dict]) -> None:
         """Append blocks to a page, batching in groups of 100 (API limit)."""
-        for i in range(0, len(blocks), 100):
-            batch = blocks[i : i + 100]
-            self.client.blocks.children.append(
-                block_id=page_id,
-                children=batch,
-            )
+        self._insert_blocks(page_id, blocks)
+
+    def _update_section(self, page_id: str, target: str, content: str) -> None:
+        """Find a section by heading, delete its blocks, and insert new ones."""
+        all_blocks = self._fetch_all_blocks(page_id)
+        target_lower = target.strip().lower()
+        
+        start_idx = -1
+        heading_level = -1
+        end_idx = -1
+        
+        for i, block in enumerate(all_blocks):
+            btype = block.get("type", "")
+            if btype in ("heading_1", "heading_2", "heading_3"):
+                level = int(btype[-1])
+                text = _rt_to_plain(block[btype].get("rich_text", [])).strip().lower()
+                
+                if start_idx == -1:
+                    if text == target_lower:
+                        start_idx = i
+                        heading_level = level
+                else:
+                    if level <= heading_level:
+                        end_idx = i
+                        break
+
+        if start_idx == -1:
+            raise ValueError(f"Section '{target}' not found")
+
+        if end_idx == -1:
+            end_idx = len(all_blocks)
+
+        # Blocks to delete
+        to_delete = [b["id"] for b in all_blocks[start_idx:end_idx]]
+        
+        # Block BEFORE the section (if any)
+        after_id = all_blocks[start_idx - 1]["id"] if start_idx > 0 else None
+        
+        # 1. Delete the blocks
+        self._delete_blocks(to_delete)
+        
+        # 2. Insert new blocks
+        if content:
+            content_fixed = content.replace("\\n", "\n")
+            new_blocks = _markdown_to_blocks(content_fixed)
+            if new_blocks:
+                self._insert_blocks(page_id, new_blocks, after_id=after_id)
 
     def _page_to_note(self, page: dict, content: str | None = None) -> Note:
         """Convert a Notion page + content into a Note."""
         path = self._get_path(page) or "unknown.md"
+        title = self._get_title_from_page(page)
         tags = self._get_tags_from_page(page)
         created, updated = self._get_timestamps(page)
 
-        if content is None:
-            content = self._read_page_content(page["id"])
+        # Content is ALWAYS fetched fresh to avoid race conditions/stale data
+        content = self._read_page_content(page["id"])
 
         return Note(
             path=path,
@@ -277,6 +353,7 @@ class NotionBackend(FolioBackend):
             tags=tags,
             created=created,
             updated=updated,
+            metadata={"title": title}
         )
 
     # ------------------------------------------------------------------
@@ -290,14 +367,15 @@ class NotionBackend(FolioBackend):
         # Create page with properties (no content yet)
         properties = self._build_properties(note)
         page = self.client.pages.create(
-            parent={"database_id": self.database_id},
+            parent={"data_source_id": self.database_id},
             properties=properties,
         )
         page_id = page["id"]
 
         # Append content as blocks
         if note.content:
-            blocks = _markdown_to_blocks(note.content)
+            content_fixed = note.content.replace("\\n", "\n")
+            blocks = _markdown_to_blocks(content_fixed)
             if blocks:
                 self._append_blocks(page_id, blocks)
 
@@ -367,9 +445,7 @@ class NotionBackend(FolioBackend):
                 case "append":
                     self._append_page_content(page_id, content)
                 case "section":
-                    current_md = self._read_page_content(page_id)
-                    new_md = replace_section(current_md, target, content)
-                    self._write_page_content(page_id, new_md)
+                    self._update_section(page_id, target, content)
                 case _:
                     raise ValueError(f"Invalid mode: {mode}")
 
@@ -487,7 +563,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"databases/{self.database_id}/query",
+                path=f"data_sources/{self.database_id}/query",
                 method="POST",
                 body=body,
             )
@@ -674,7 +750,7 @@ class NotionBackend(FolioBackend):
                 body["start_cursor"] = cursor
 
             response = self.client.request(
-                path=f"databases/{self.database_id}/query",
+                path=f"data_sources/{self.database_id}/query",
                 method="POST",
                 body=body,
             )
