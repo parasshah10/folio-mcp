@@ -91,9 +91,11 @@ class FolioConfig(BaseModel):
             if not self.notion.database_id:
                 errors.append("NOTION_DATABASE_ID is required for Notion backend")
         elif self.backend == "local":
-            root = Path(self.local.root)
-            if not root.parent.exists():
-                errors.append(f"Parent directory does not exist: {root.parent}")
+            root = Path(self.local.root).expanduser()
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                errors.append(f"Failed to create notes directory {root}: {e}")
         elif self.backend not in ("local", "notion"):
             errors.append(f"Unknown backend: {self.backend}. Use 'local' or 'notion'.")
         return errors
