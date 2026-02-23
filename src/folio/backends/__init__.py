@@ -24,7 +24,7 @@ class FolioBackend(ABC):
     def update(
         self,
         path: str,
-        content: str,
+        content: str | None,
         mode: str = "replace",
         target: str | None = None,
         tags: list[str] | None = None,
