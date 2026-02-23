@@ -75,13 +75,16 @@ def folio(
         description="Note path, e.g. 'projects/companion.md'. Required except for list."
     )] = None,
     content: Annotated[Optional[str], Field(
-        description="Markdown content. Required for create and update."
+        description="Markdown content for create/update. Omit on update to keep existing."
     )] = None,
     mode: Annotated[Optional[str], Field(
-        description="Update mode: 'replace' (default), 'append', or 'section'."
+        description="Update mode: 'replace' (default), 'append', or 'section'"
     )] = None,
     target: Annotated[Optional[str], Field(
-        description="Heading name for section mode, or destination path for move."
+        description="Heading name for mode='section' (no # prefix)"
+    )] = None,
+    destination: Annotated[Optional[str], Field(
+        description="New path for action='move'"
     )] = None,
     tags: Annotated[Optional[List[str]], Field(
         description="Tags for organization. Used with create and update."
@@ -90,22 +93,23 @@ def folio(
         description="Folder to list. Only used with action='list'."
     )] = None,
     section: Annotated[Optional[str], Field(
-        description="Heading to read. Only used with action='read'."
+        description="Read only this section (heading text, no # prefix)"
     )] = None,
 ) -> Dict[str, Any]:
-    """Create, read, update, delete, move, list, or undo notes.
-    Markdown files organized in folders with automatic versioning.
+    """Markdown notes in folders with tags and versioning.
+    Use append for running logs, section to refresh one heading, replace to rewrite.
 
     Examples:
-        Create:  action='create', path='journal/today.md', content='# Feb 23\\nGood day.'
-        Read:    action='read', path='journal/today.md'
-        Read §:  action='read', path='journal/today.md', section='Afternoon'
-        Append:  action='update', path='journal/today.md', content='\\n- new item', mode='append'
-        Section: action='update', path='notes/project.md', content='new text', mode='section', target='Status'
-        Delete:  action='delete', path='journal/today.md'
-        Move:    action='move', path='journal/today.md', target='archive/today.md'
+        Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
+                 content='# Sunday\\n## Morning\\nCycled in -6°C...\\n## Evening\\n...'
+        Read section:  action='read', path='people/him❤️/plans.md', section='Weekend Cabin Trip'
+        Append:  action='update', path='watching/watchlist.md', mode='append',
+                 content='\\n- The Terror S1 — slow-burn arctic horror'
+        Section: action='update', path='projects/companion.md', mode='section',
+                 target='Status', content='Folio MCP complete. Testing phase.'
+        Retag:   action='update', path='shows/dark.md', tags=['favorite', 'pinned']
+        Move:    action='move', path='notes/pizza.md', destination='food/pizza.md'
         List:    action='list', folder='journal'
-        Undo:    action='undo', path='journal/today.md'
     """
     try:
         match action:
@@ -224,11 +228,11 @@ def folio_search(
     """Search across all notes by content, filename, tags, and time.
 
     Examples:
-        Basic:     query='architecture decisions'
-        Tagged:    query='todo', tags=['urgent']
-        Scoped:    query='deployment', folder='projects'
-        Recent:    query='meeting', sort='recent', updated_since='7d'
-        Limited:   query='ideas', limit=5
+        Content:   query='cycling routes near Malmö'
+        Tagged:    query='birthday', tags=['person']
+        Scoped:    query='memory architecture', folder='projects'
+        Pinned:    query='', tags=['pinned']
+        Recent:    query='illustration', sort='recent', updated_since='7d'
     """
     try:
         results = backend.search(
