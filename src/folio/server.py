@@ -86,9 +86,6 @@ def folio(
     destination: Annotated[Optional[str], Field(
         description="New path for action='move'"
     )] = None,
-    destination: Annotated[Optional[str], Field(
-        description="New path for action='move'"
-    )] = None,
     tags: Annotated[Optional[List[str]], Field(
         description="Tags for organization. Used with create and update."
     )] = None,

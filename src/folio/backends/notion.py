@@ -25,7 +25,10 @@ from folio.sections import extract_section, replace_section
 class NotionBackend(FolioBackend):
 
     def __init__(self, config: NotionConfig):
-        self.client = NotionClient(auth=config.api_key)
+        self.client = NotionClient(
+            auth=config.api_key,
+            notion_version="2022-06-28"
+        )
         self.database_id = config.database_id
         self._cache: dict[str, str] = {}  # path → page_id
         self._ensure_schema()
