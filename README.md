@@ -1,4 +1,3 @@
-```markdown
 # 📓 Folio MCP
 
 Working memory for AI companions. Two tools, markdown in and out, swappable backends.
