@@ -213,7 +213,7 @@ class LocalBackend(FolioBackend):
     def update(
         self,
         path: str,
-        content: str,
+        content: str | None,                    
         mode: str = "replace",
         target: str | None = None,
         tags: list[str] | None = None,
@@ -225,7 +225,7 @@ class LocalBackend(FolioBackend):
             case "replace":
                 new_content = content if content is not None else note.content
             case "append":
-                new_content = note.content + "\n" + content
+                new_content = note.content + "\n" + content if content is not None else note.content  # ← guarded
             case "section":
                 new_content = replace_section(note.content, target, content)
             case _:
