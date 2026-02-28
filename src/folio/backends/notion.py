@@ -351,7 +351,16 @@ class NotionBackend(FolioBackend):
             content_range = f"{actual_heading}...{end_marker}"
             new_text += f"\n{end_marker}"
         else:
-            content_range = f"{actual_heading}..."
+            # Last section: match from heading to the very last line of the page
+            non_empty_lines = [l for l in lines if l.strip()]
+            if non_empty_lines:
+                last_line = non_empty_lines[-1]
+                if last_line != actual_heading:
+                    content_range = f"{actual_heading}...{last_line}"
+                else:
+                    content_range = actual_heading
+            else:
+                content_range = actual_heading
 
         try:
             self.client.request(
