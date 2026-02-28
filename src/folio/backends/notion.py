@@ -19,7 +19,7 @@ from notion_client.errors import APIResponseError
 from folio.backends import FolioBackend
 from folio.config import NotionConfig
 from folio.models import Note, NoteSummary, SearchResult
-from folio.sections import extract_section, replace_section
+from folio.sections import extract_section, replace_section, strip_redundant_heading
 
 
 def _slugify_title(title: str) -> str:
@@ -336,11 +336,11 @@ class NotionBackend(FolioBackend):
         if end_idx == -1:
             end_idx = len(all_blocks)
 
-        # Blocks to delete (including the heading block itself)
-        to_delete = [b["id"] for b in all_blocks[start_idx:end_idx]]
+        # Blocks to delete (EVERYTHING after the heading up to the next section)
+        to_delete = [b["id"] for b in all_blocks[start_idx + 1:end_idx]]
         
-        # Block BEFORE the heading (if any) to insert after
-        after_id = all_blocks[start_idx - 1]["id"] if start_idx > 0 else None
+        # Heading block itself is our insertion point
+        after_id = all_blocks[start_idx]["id"]
         
         # 1. Delete the blocks
         self._delete_blocks(to_delete)
@@ -348,7 +348,9 @@ class NotionBackend(FolioBackend):
         # 2. Insert new blocks
         if content:
             content_fixed = content.replace("\\n", "\n")
-            new_blocks = _markdown_to_blocks(content_fixed)
+            # Strip redundant heading if it matches the target
+            clean_body = strip_redundant_heading(content_fixed, target)
+            new_blocks = _markdown_to_blocks(clean_body)
             if new_blocks:
                 self._insert_blocks(page_id, new_blocks, after_id=after_id)
 

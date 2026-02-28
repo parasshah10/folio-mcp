@@ -82,20 +82,39 @@ def extract_section_body(content: str, heading: str) -> str | None:
     return section[first_newline + 1 :].rstrip("\n")
 
 
-def replace_section(content: str, heading: str, new_content: str) -> str:
-    """Replace a section (including its heading) with new content.
+def strip_redundant_heading(content: str, target: str) -> str:
+    """Remove a leading markdown heading if it matches the target text."""
+    lines = content.split("\n")
+    if not lines:
+        return content
 
-    The caller should provide the full replacement text, including the heading
-    if they want to keep it. The old section from the target heading up to the
-    next heading of the same or higher level is removed.
+    first_line = lines[0].strip()
+    match = re.match(r"^(#{1,6})\s+(.+)$", first_line)
+    if match:
+        heading_text = match.group(2).strip().lower()
+        if heading_text == target.strip().lower():
+            # Remove the first line and any following empty lines
+            remaining = lines[1:]
+            while remaining and not remaining[0].strip():
+                remaining.pop(0)
+            return "\n".join(remaining)
+
+    return content
+
+
+def replace_section(content: str, heading: str, new_body: str) -> str:
+    """Replace the body of a section, preserving its original heading line.
+
+    The original heading line (including its # level) is kept. Any leading
+    heading in new_body that matches 'heading' is stripped to avoid duplication.
 
     Args:
         content: Full markdown content.
         heading: Heading text WITHOUT the # prefix.
-        new_content: The new content to insert in place of the old section.
+        new_body: The new body content for the section.
 
     Returns:
-        The full markdown content with the section replaced.
+        The full markdown content with the section body replaced.
 
     Raises:
         ValueError: If the heading is not found.
@@ -105,11 +124,20 @@ def replace_section(content: str, heading: str, new_content: str) -> str:
         raise ValueError(f"Heading not found: '{heading}'")
 
     start, end = span
-    
-    # Ensure there is a newline between the new content and whatever follows
-    # if we're not at the end of the file.
-    replacement = new_content.strip() + "\n"
-    
+    section_text = content[start:end]
+
+    # Preserve the original heading line
+    first_newline = section_text.find("\n")
+    if first_newline == -1:
+        heading_line = section_text
+    else:
+        heading_line = section_text[:first_newline]
+
+    # Strip redundant heading from new_body if present
+    clean_body = strip_redundant_heading(new_body, heading)
+
+    # Rebuild: everything before + preserved heading + cleaned body + everything after
+    replacement = heading_line + "\n" + clean_body.strip() + "\n"
     return content[:start] + replacement + content[end:]
 
 
