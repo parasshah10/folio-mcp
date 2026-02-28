@@ -19,9 +19,9 @@ CREATE TABLE notes (
 
     -- Full-text search vector (auto-generated, weighted)
     search_vector   TSVECTOR GENERATED ALWAYS AS (
-        setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-        setweight(to_tsvector('english', coalesce(content, '')), 'B') ||
-        setweight(to_tsvector('english', coalesce(array_to_string(tags, ' '), '')), 'C')
+        setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english'::regconfig, coalesce(content, '')), 'B') ||
+        setweight(to_tsvector('english'::regconfig, coalesce(tags::text, '')), 'C')
     ) STORED
 );
 
