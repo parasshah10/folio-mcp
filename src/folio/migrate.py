@@ -36,6 +36,8 @@ def migrate_notion_to_supabase():
             "tags": note.tags,
             "folder": note.folder,
             "size_tokens": note.size_tokens,
+            "created_at": note.created.isoformat(),
+            "updated_at": note.updated.isoformat(),
             "external_id": page_id,
             "external_edited_at": note.updated.isoformat(),
             "sync_status": "synced",

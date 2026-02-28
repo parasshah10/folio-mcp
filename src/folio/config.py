@@ -73,6 +73,10 @@ class FolioConfig(BaseModel):
             FOLIO_MAX_RESULTS      - search max results (default: 20)
             FOLIO_RECENCY_BOOST    - search recency weight 0-1 (default: 0.3)
             FOLIO_WARN_TOKENS      - token count warning threshold (default: 2000)
+            SUPABASE_URL           - Supabase project URL (for supabase backend)
+            SUPABASE_KEY           - Supabase secret/service_role key (for supabase backend)
+            FOLIO_SYNC             - sync adapter: 'none' or 'notion' (default: none)
+            FOLIO_SYNC_INTERVAL    - sync interval in seconds (default: 30)
         """
         return cls(
             backend=os.environ.get("FOLIO_BACKEND", "local"),
