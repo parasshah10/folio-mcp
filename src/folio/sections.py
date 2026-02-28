@@ -82,28 +82,35 @@ def extract_section_body(content: str, heading: str) -> str | None:
     return section[first_newline + 1 :].rstrip("\n")
 
 
-def replace_section(content: str, heading: str, new_body: str) -> str:
-    """Replace the body of a section, keeping the heading line.
+def replace_section(content: str, heading: str, new_content: str) -> str:
+    """Replace a section (including its heading) with new content.
 
-    Raises ValueError if heading not found.
+    The caller should provide the full replacement text, including the heading
+    if they want to keep it. The old section from the target heading up to the
+    next heading of the same or higher level is removed.
+
+    Args:
+        content: Full markdown content.
+        heading: Heading text WITHOUT the # prefix.
+        new_content: The new content to insert in place of the old section.
+
+    Returns:
+        The full markdown content with the section replaced.
+
+    Raises:
+        ValueError: If the heading is not found.
     """
     span = find_section(content, heading)
     if span is None:
         raise ValueError(f"Heading not found: '{heading}'")
 
     start, end = span
-    section = content[start:end]
-
-    # Preserve the heading line
-    first_newline = section.find("\n")
-    if first_newline == -1:
-        heading_line = section
-    else:
-        heading_line = section[:first_newline]
-
-    # Rebuild: everything before section + heading + new body + everything after
-    new_section = heading_line + "\n" + new_body.strip() + "\n"
-    return content[:start] + new_section + content[end:]
+    
+    # Ensure there is a newline between the new content and whatever follows
+    # if we're not at the end of the file.
+    replacement = new_content.strip() + "\n"
+    
+    return content[:start] + replacement + content[end:]
 
 
 def list_headings(content: str) -> list[dict[str, str | int]]:

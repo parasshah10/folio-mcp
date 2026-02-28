@@ -115,7 +115,7 @@ def folio(
     )] = None,
 ) -> Dict[str, Any]:
     """Markdown notes in folders with tags and versioning.
-    Use append for running logs, section to refresh one heading, replace to rewrite.
+    Use append for running logs, section to refresh one heading (including its title), replace to rewrite.
 
     Examples:
         Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
@@ -124,7 +124,7 @@ def folio(
         Append:  action='update', path='watching/watchlist.md', mode='append',
                  content='\\n- The Terror S1 — slow-burn arctic horror'
         Section: action='update', path='projects/companion.md', mode='section',
-                 target='Status', content='Folio MCP complete. Testing phase.'
+                 target='Status', content='## Status\\n\\nFolio MCP complete. Testing phase.'
         Retag:   action='update', path='shows/dark.md', tags=['favorite', 'pinned']
         Move:    action='move', path='notes/pizza.md', destination='food/pizza.md'
         List:    action='list', folder='journal'
