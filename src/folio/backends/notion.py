@@ -248,39 +248,56 @@ class NotionBackend(FolioBackend):
         return _blocks_to_markdown(blocks)
 
     def _write_page_content(self, page_id: str, markdown: str) -> None:
-        """Replace all page content reliably by clearing blocks then inserting."""
-        # 1. Clear existing blocks
+        """Replace all page content surgically by matching the old content string."""
+        if not markdown:
+            # Full clear requested
+            self._clear_all_blocks(page_id)
+            return
+
+        # 1. Read current content (1-2 calls) to get exact match string
+        try:
+            old_content = self._read_page_content(page_id)
+        except Exception:
+            old_content = ""
+
+        # 2. If already empty, just insert
+        if not old_content.strip():
+            self._append_page_content(page_id, markdown)
+            return
+
+        # 3. Surgical overwrite in 1 call
+        try:
+            self.client.request(
+                path=f"pages/{page_id}/markdown",
+                method="PATCH",
+                body={
+                    "type": "replace_content_range",
+                    "replace_content_range": {
+                        "content_range": old_content,
+                        "content": markdown.replace("\\n", "\n")
+                    }
+                }
+            )
+        except APIResponseError as e:
+            logger.warning(f"Surgical overwrite failed, falling back to block-clearing: {e}")
+            self._clear_all_blocks(page_id)
+            self._append_page_content(page_id, markdown)
+
+    def _clear_all_blocks(self, page_id: str) -> None:
+        """Delete all blocks on the page using block-by-block deletion."""
         blocks = self._fetch_all_blocks(page_id)
         for b in blocks:
             try:
-                # We use the generic request() because blocks.delete() might not be in all client versions
                 self.client.request(path=f"blocks/{b['id']}", method="DELETE")
             except Exception:
                 continue
 
-        # 2. Insert new content via native Markdown API
-        if not markdown:
-            return
-
-        content = markdown.replace("\\n", "\n")
-        self.client.request(
-            path=f"pages/{page_id}/markdown",
-            method="PATCH",
-            body={
-                "type": "insert_content",
-                "insert_content": {
-                    "content": content
-                }
-            }
-        )
-
     def _append_page_content(self, page_id: str, markdown: str) -> None:
-        """Append markdown to end of page using native Markdown API."""
+        """Append markdown to end of page in a single call."""
         if not markdown:
             return
             
         content = markdown.replace("\\n", "\n")
-        # Ensure we start on a new line
         if not content.startswith("\n"):
             content = "\n" + content
 
@@ -296,40 +313,73 @@ class NotionBackend(FolioBackend):
         )
 
     def _update_section(self, page_id: str, target: str, content: str) -> None:
-        """Update a section using native Markdown ellipsis matching."""
+        """Surgically update a section using ellipsis-based anchoring."""
+        # 1. Fetch current markdown
+        full_content = self._read_page_content(page_id)
+        
+        # 2. Identify the range start and end markers
+        lines = full_content.split("\n")
+        target_line_idx = -1
+        next_heading_idx = -1
+        
+        target_norm = target.strip().lower()
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                header_text = stripped.lstrip("#").strip().lower()
+                if header_text == target_norm:
+                    target_line_idx = i
+                    for j in range(i + 1, len(lines)):
+                        if lines[j].strip().startswith("#"):
+                            next_heading_idx = j
+                            break
+                    break
+
+        if target_line_idx == -1:
+            logger.info(f"Section '{target}' not found, appending.")
+            self._append_page_content(page_id, f"\n## {target}\n\n{content}")
+            return
+
         content_fixed = content.replace("\\n", "\n")
-        # Strip redundant heading if it matches the target
         clean_body = strip_redundant_heading(content_fixed, target)
         
-        # We assume the heading exists. We replace from heading start to end of section.
-        # This is a bit tricky with native matching if we don't know the exact heading text.
-        # But we can try to match the heading text itself.
-        
-        # Try matching any heading level with the target text
-        self.client.request(
-            path=f"pages/{page_id}/markdown",
-            method="PATCH",
-            body={
-                "type": "replace_content_range",
-                "replace_content_range": {
-                    # This is the "be liberal" native version: 
-                    # matches the heading text and everything until the next heading or EOF
-                    "content_range": f"{target}...#", 
-                    "content": f"{target}\n\n{clean_body}\n\n#" 
+        actual_heading = lines[target_line_idx]
+        new_text = f"{actual_heading}\n\n{clean_body}\n"
+
+        if next_heading_idx != -1:
+            end_marker = lines[next_heading_idx]
+            content_range = f"{actual_heading}...{end_marker}"
+            new_text += f"\n{end_marker}"
+        else:
+            content_range = f"{actual_heading}..."
+
+        try:
+            self.client.request(
+                path=f"pages/{page_id}/markdown",
+                method="PATCH",
+                body={
+                    "type": "replace_content_range",
+                    "replace_content_range": {
+                        "content_range": content_range,
+                        "content": new_text
+                    }
                 }
-            }
-        )
-        # Note: The above is a heuristic. If it fails, we fall back to full page write.
-        # Since we can't read markdown natively to find exact offsets, 
-        # the most reliable way for internal integrations is often full replace.
-        
+            )
+        except APIResponseError as e:
+            logger.warning(f"Surgical ellipsis update failed: {e}. Falling back to full overwrite.")
+            from folio.sections import replace_section
+            try:
+                new_full_content = replace_section(full_content, target, content)
+                self._write_page_content(page_id, new_full_content)
+            except ValueError:
+                self._append_page_content(page_id, f"\n## {target}\n\n{content}")
+
     def _page_to_note(self, page: dict, content: str | None = None) -> Note:
         """Convert a Notion page + content into a Note."""
         folio_path = self._get_path(page)
         title = self._get_title_from_page(page)
         folder = self._get_folder(page)
 
-        # Path derivation for notes created directly in Notion UI
         if not folio_path:
             slug = _slugify_title(title) if title else f"untitled-{page['id'][:8]}.md"
             folio_path = f"{folder}/{slug}" if folder else slug
@@ -428,12 +478,9 @@ class NotionBackend(FolioBackend):
                 case "append":
                     self._append_page_content(page_id, content)
                 case "section":
-                    # For now, full replace is safer than heuristic matching 
-                    # since we can't read markdown natively to verify the match
-                    note = self._page_to_note(page)
-                    from folio.sections import replace_section
-                    new_full_content = replace_section(note.content, target, content)
-                    self._write_page_content(page_id, new_full_content)
+                    if not target:
+                        raise ValueError("Section update requires a 'target' heading")
+                    self._update_section(page_id, target, content)
                 case _:
                     raise ValueError(f"Invalid mode: {mode}")
 
