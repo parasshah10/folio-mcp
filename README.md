@@ -122,6 +122,78 @@ Folio's Supabase-first architecture ensures the AI never waits for Notion.
 | **Create / Update** | **~50ms** | Saved to Supabase instantly; Notion sync runs in background. |
 | **Direct Notion Read** | ~1-2s | *(Only if using the Direct Notion backend)* |
 
+## Why Folio over the Official Notion MCP?
+
+The official [Notion MCP](https://github.com/makenotion/notion-mcp-server) is an enterprise integration layer — it wraps Notion's full API so an LLM can manage workspaces, databases, comments, users, and teams. Folio is a purpose-built companion memory layer. They solve fundamentally different problems.
+
+### Token Tax: The Hidden Cost
+
+Every MCP tool definition is injected into the LLM's context on **every turn**. This is a permanent tax on attention and cost. We tokenized both tool surfaces using OpenAI's tokenizer:
+
+| | Tools | Total Tokens / Turn |
+|---|---|---|
+| **Notion MCP** | 12 | **11,300** |
+| **Folio** | 2 | **1,216** |
+| **Ratio** | 6x more tools | **9.3x heavier** |
+
+#### Cumulative cost over a conversation:
+
+| Turns | Notion MCP | Folio | Tokens Saved |
+|---|---|---|---|
+| 10 | 113,000 | 12,160 | **100,840** |
+| 50 | 565,000 | 60,800 | **504,200** |
+| 100 | 1,130,000 | 121,600 | **~1,000,000** |
+
+Over a 100-turn companion conversation, Folio saves roughly **one million input tokens**. Beyond cost, this matters for attention quality — an LLM holding 11,300 tokens of SQL DDL schemas, UUID formatting rules, and team permission logic on every turn is measurably worse at its actual job: being a good companion.
+
+### Tool-by-Tool Breakdown
+
+| Notion MCP Tool | Tokens | Folio Equivalent | Tokens |
+|---|---|---|---|
+| `notion-search` | 1,242 | `folio_search` | 447 |
+| `notion-fetch` | 475 | `folio(action='read')` | included |
+| `notion-create-pages` | 1,853 | `folio(action='create')` | included |
+| `notion-update-page` | 1,856 | `folio(action='update')` | included |
+| `notion-move-pages` | 664 | `folio(action='move')` | included |
+| `notion-duplicate-page` | 174 | `read` → `create` (2 calls) | included |
+| `notion-create-database` | 800 | N/A (folders + tags) | — |
+| `notion-update-data-source` | 912 | N/A | — |
+| `notion-create-comment` | 2,425 | N/A | — |
+| `notion-get-comments` | 330 | N/A | — |
+| `notion-get-teams` | 172 | N/A (single-user) | — |
+| `notion-get-users` | 397 | N/A (single-user) | — |
+| **Total** | **11,300** | **Total** | **1,216** |
+
+Notion's `create-comment` tool alone (2,425 tokens) is **larger than Folio's entire tool surface, twice over**.
+
+### Operational Comparison
+
+| Operation | Notion MCP | Folio |
+|---|---|---|
+| Search by text | 1 call + complex JSON filters | 1 call: `query` + `tags` + `folder` |
+| Filter by date/tag | 1 call + nested filter objects with UUIDs | 1 call: `updated_since='7d'`, `tags=['project']` |
+| Read a document | 1 call — dumps entire content, no size awareness | 1 call — warns if over token threshold; supports `section='Heading'` for partial reads |
+| Append to a log | 2 calls: `fetch` → `update` (must locate last block + craft ellipsis string) | 1 call: `mode='append'` |
+| Update one section in a large doc | 2 calls + **high failure rate** (must craft exact `selection_with_ellipsis` string; breaks on duplicate text/whitespace) | 1 call: `mode='section', target='Heading'` — heading-based targeting, near-zero failure |
+| Undo a mistake | ❌ Not possible via MCP | ✅ `action='undo'` — Git rollback |
+| Smart error recovery | ❌ Raw API errors | ✅ Returns `available_sections`, `existing` content to save round-trips |
+
+### What Notion MCP Can Do That Folio Can't
+
+| Capability | Relevant to Companion Memory? |
+|---|---|
+| Relational databases with SQL DDL schemas | ❌ Companions don't need relational joins — tags and folders are sufficient |
+| Comments & discussion threads | ❌ Companions interact via chat, not async page comments |
+| Team/user management | ❌ Companion memory is single-user |
+| Rich media & video transcripts | ⚠️ Niche — companion working memory is text-first |
+| Strict data type validation | ⚠️ Prevents data rot, but adds friction — tradeoff |
+
+### The Core Difference
+
+The Notion MCP makes your AI a **Notion power user** — it can manage databases, query teams, leave comments, and navigate complex workspace hierarchies using UUIDs.
+
+Folio makes your AI a **writer with a notebook** — it reads, writes, searches, and organizes Markdown notes using human-readable paths, with instant response times and zero schema overhead.
+
 ## Tool Reference
 
 ### `folio` — Read and Write Notes
