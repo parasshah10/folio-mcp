@@ -23,14 +23,13 @@ if errors:
     sys.exit(1)
 
 import threading
-import asyncio
 
 backend: FolioBackend = get_backend(config)
 
 # Start background sync engine if configured
 if hasattr(backend, "sync_engine") and backend.sync_engine:
     def _run_sync():
-        asyncio.run(backend.sync_engine.run_loop(config.sync.interval_seconds))
+        backend.sync_engine.run_loop(config.sync.interval_seconds)
     threading.Thread(target=_run_sync, daemon=True).start()
 
 mcp = FastMCP("folio")

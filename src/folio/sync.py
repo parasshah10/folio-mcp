@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import asyncio
 import logging
+import time
 
 from supabase import Client
 from folio.models import Note
@@ -39,16 +40,15 @@ class SyncEngine:
         self.adapter = adapter
         self.client = client
 
-    async def run_loop(self, interval_seconds: int = 30):
-        logger.info(f"Starting Folio SyncEngine (interval: {interval_seconds}s)")
+    def run_loop(self, interval_seconds: int = 30):
+        logger.info(f"Starting Folio SyncEngine — pull only (interval: {interval_seconds}s)")
         while True:
             try:
-                self.push_pending()
                 self.pull_changes()
                 self.reconcile()
             except Exception as e:
                 logger.error(f"SyncEngine error in loop: {e}")
-            await asyncio.sleep(interval_seconds)
+            time.sleep(interval_seconds)
 
     def push_pending(self):
         """Push local changes to the external platform."""

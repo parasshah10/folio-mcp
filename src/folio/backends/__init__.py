@@ -70,17 +70,21 @@ def get_backend(config: "FolioConfig") -> FolioBackend:
             return NotionBackend(config.notion)
         case "supabase":
             from folio.backends.supabase import SupabaseBackend
+            
+            notion_backend = None
             sync_engine = None
             
             if config.sync.backend == "notion":
+                from folio.backends.notion import NotionBackend
                 from supabase import create_client
                 from folio.sync import SyncEngine
                 from folio.sync_adapters.notion import NotionSyncAdapter
                 
+                notion_backend = NotionBackend(config.notion)
                 adapter = NotionSyncAdapter(config.notion)
                 client = create_client(config.supabase.url, config.supabase.key)
                 sync_engine = SyncEngine(adapter, client)
-                
-            return SupabaseBackend(config.supabase, sync_engine=sync_engine)
+            
+            return SupabaseBackend(config.supabase, notion_backend=notion_backend, sync_engine=sync_engine)
         case _:
             raise ValueError(f"Unknown backend: {config.backend}")

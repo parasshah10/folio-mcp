@@ -1,4 +1,6 @@
 import re
+import threading
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, List
 
@@ -11,9 +13,49 @@ from folio.models import Note, NoteSummary, SearchResult
 from folio.sections import extract_section, replace_section
 
 class SupabaseBackend(FolioBackend):
-    def __init__(self, config: SupabaseConfig, sync_engine=None):
+    def __init__(self, config: SupabaseConfig, notion_backend=None, sync_engine=None):
         self.client: Client = create_client(config.url, config.key)
+        self.notion = notion_backend
         self.sync_engine = sync_engine
+        self.logger = logging.getLogger("folio.supabase")
+
+    def _push_to_notion(self, operation: str, **kwargs):
+        """Fire-and-forget push to Notion in a background thread."""
+        if not self.notion:
+            return
+        
+        def _do_push():
+            try:
+                if operation == "create":
+                    note = kwargs["note"]
+                    self.notion.create(note)
+                elif operation == "update":
+                    self.notion.update(
+                        path=kwargs["path"],
+                        content=kwargs.get("content"),
+                        mode=kwargs.get("mode", "replace"),
+                        target=kwargs.get("target"),
+                        tags=kwargs.get("tags"),
+                    )
+                elif operation == "delete":
+                    self.notion.delete(kwargs["path"])
+                elif operation == "move":
+                    self.notion.move(source=kwargs["source"], target=kwargs["target_path"])
+                
+                # Mark as synced in Supabase
+                path = kwargs.get("path") or kwargs.get("note", {}).path
+                if operation == "move":
+                    path = kwargs["target_path"]
+                self.client.table("notes").update({
+                    "sync_status": "synced",
+                    "last_synced_at": datetime.now(timezone.utc).isoformat()
+                }).eq("path", path).execute()
+                
+            except Exception as e:
+                self.logger.error(f"Background Notion push failed ({operation} {kwargs.get('path', '')}): {e}")
+                # Note stays as 'pending_push' in Supabase — sync engine can retry later
+        
+        threading.Thread(target=_do_push, daemon=True).start()
 
     def _row_to_note(self, row: dict) -> Note:
         return Note(
@@ -44,7 +86,9 @@ class SupabaseBackend(FolioBackend):
                 "metadata": note.metadata
             }
             res = self.client.table("notes").insert(data).execute()
-            return self._row_to_note(res.data[0])
+            result = self._row_to_note(res.data[0])
+            self._push_to_notion("create", note=note, path=note.path)
+            return result
         except postgrest.exceptions.APIError as e:
             if "duplicate key value" in str(e):
                 raise FileExistsError(f"Note already exists: {note.path}")
@@ -101,7 +145,9 @@ class SupabaseBackend(FolioBackend):
         }
         
         res = self.client.table("notes").update(data).eq("path", path).execute()
-        return self._row_to_note(res.data[0])
+        result = self._row_to_note(res.data[0])
+        self._push_to_notion("update", path=path, content=content, mode=mode, target=target, tags=tags)
+        return result
 
     def delete(self, path: str) -> None:
         # Verify exists
@@ -111,6 +157,8 @@ class SupabaseBackend(FolioBackend):
             self.client.table("notes").update({"sync_status": "pending_delete"}).eq("path", path).execute()
         else:
             self.client.table("notes").delete().eq("path", path).execute()
+        
+        self._push_to_notion("delete", path=path)
 
     def move(self, source: str, target: str) -> Note:
         note = self.read(source)
@@ -124,7 +172,9 @@ class SupabaseBackend(FolioBackend):
         }
         try:
             res = self.client.table("notes").update(data).eq("path", source).execute()
-            return self._row_to_note(res.data[0])
+            result = self._row_to_note(res.data[0])
+            self._push_to_notion("move", source=source, target_path=target, path=target)
+            return result
         except postgrest.exceptions.APIError as e:
             if "duplicate key value" in str(e):
                 raise FileExistsError(f"Target already exists: {target}")
