@@ -62,7 +62,15 @@ NOTION_API_KEY=ntn_...
 NOTION_DATABASE_ID=abc123...
 ```
 
-**B. Direct Notion (No Cache)**
+**B. Supabase Only**
+High-performance Postgres storage without the Notion UI.
+```env
+FOLIO_BACKEND=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=eyJ...
+```
+
+**C. Direct Notion (No Cache)**
 Simplest cloud setup. Note: Tradeoff is latency (~1-2s per operation instead of ~50ms).
 ```env
 FOLIO_BACKEND=notion
@@ -70,7 +78,7 @@ NOTION_API_KEY=ntn_...
 NOTION_DATABASE_ID=abc123...
 ```
 
-**C. Local Filesystem**
+**D. Local Filesystem**
 Simple offline markdown files backed by local Git versioning.
 ```env
 FOLIO_BACKEND=local
@@ -121,14 +129,28 @@ Performs targeted CRUD operations.
 
 **Examples (JSON syntax):**
 ```json
-// Create a new note
-{ "action": "create", "path": "projects/folio.md", "content": "# Folio\n..." }
+{
+  "action": "create",
+  "path": "projects/folio.md",
+  "content": "# Folio\n..."
+}
+```
 
-// Update a specific section surgically
-{ "action": "update", "path": "projects/folio.md", "mode": "section", "target": "Status", "content": "All tests passing." }
+```json
+{
+  "action": "update",
+  "path": "projects/folio.md",
+  "mode": "section",
+  "target": "Status",
+  "content": "All tests passing."
+}
+```
 
-// Read a note
-{ "action": "read", "path": "projects/folio.md" }
+```json
+{
+  "action": "read",
+  "path": "projects/folio.md"
+}
 ```
 
 ### `folio_search` — Find Notes
@@ -136,11 +158,17 @@ Search by content, tags, folder, or recency. Results are ranked by relevance.
 
 **Examples (JSON syntax):**
 ```json
-// Search by content and folder
-{ "query": "Postgres architecture", "folder": "tech" }
+{
+  "query": "Postgres architecture",
+  "folder": "tech"
+}
+```
 
-// Find pinned person notes
-{ "query": "birthday", "tags": ["person"] }
+```json
+{
+  "query": "birthday",
+  "tags": ["person"]
+}
 ```
 
 ## Environment Variable Reference
@@ -168,7 +196,7 @@ Updates use an optimized surgical Markdown strategy guaranteeing a constant **~5
 ## Known Limitations
 - **Undo**: The `undo` action currently only works on the `local` (Git) backend.
 - **Deletion Delay**: If you delete a note in Notion, it may take up to 2 minutes (the reconcile interval) to disappear from the Folio cache.
-- **Zombie ID**: Creating a note in Folio exactly as it is being manually created in Notion with the same path can occasionally cause a duplicate entry during sync.
+- **Zombie ID**: If you delete a note in Notion and immediately recreate a note with the exact same name/path before the reconcile sync runs, it can occasionally cause sync oscillations or duplicate entries.
 
 ## Project Structure
 
