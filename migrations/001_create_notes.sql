@@ -70,6 +70,8 @@ RETURNS TABLE (
     score REAL,
     snippet TEXT
 ) AS $$
+DECLARE
+    has_search BOOLEAN := (search_term IS NOT NULL AND search_term != '');
 BEGIN
     RETURN QUERY
     SELECT
@@ -78,20 +80,27 @@ BEGIN
         n.tags,
         n.updated_at,
         n.size_tokens,
-        ts_rank(n.search_vector, q)::REAL AS score,
-        ts_headline('english', n.content, q,
-            'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**'
-        ) AS snippet
-    FROM notes n,
-        websearch_to_tsquery('english'::regconfig, search_term) q
-    WHERE n.search_vector @@ q
+        CASE WHEN has_search
+             THEN ts_rank(n.search_vector, websearch_to_tsquery('english', search_term))
+             ELSE 0.0
+        END::REAL AS score,
+        CASE WHEN has_search
+             THEN ts_headline('english', n.content,
+                  websearch_to_tsquery('english', search_term),
+                  'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**')
+             ELSE left(n.content, 150)
+        END AS snippet
+    FROM notes n
+    WHERE
+        (NOT has_search OR n.search_vector @@ websearch_to_tsquery('english', search_term))
         AND n.sync_status != 'pending_delete'
         AND (filter_folder IS NULL OR n.folder = filter_folder)
         AND (filter_tags IS NULL OR n.tags @> filter_tags)
         AND (filter_since IS NULL OR n.updated_at > filter_since)
     ORDER BY
         CASE WHEN sort_by = 'recent' THEN extract(epoch FROM n.updated_at) ELSE NULL END DESC NULLS LAST,
-        CASE WHEN sort_by != 'recent' THEN ts_rank(n.search_vector, q) ELSE NULL END DESC NULLS LAST
+        CASE WHEN sort_by != 'recent' AND has_search THEN ts_rank(n.search_vector, websearch_to_tsquery('english', search_term)) ELSE NULL END DESC NULLS LAST,
+        n.updated_at DESC
     LIMIT max_results;
 END;
 $$ LANGUAGE plpgsql STABLE;
