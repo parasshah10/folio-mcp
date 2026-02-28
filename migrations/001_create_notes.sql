@@ -1,3 +1,14 @@
+-- Helper function to immutably convert text array to string for search indexing
+CREATE OR REPLACE FUNCTION immutable_array_to_string(arr TEXT[])
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    RETURN array_to_string(arr, ' ');
+END;
+$$;
+
 -- Notes table
 CREATE TABLE notes (
     id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -21,7 +32,7 @@ CREATE TABLE notes (
     search_vector   TSVECTOR GENERATED ALWAYS AS (
         setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') ||
         setweight(to_tsvector('english'::regconfig, coalesce(content, '')), 'B') ||
-        setweight(to_tsvector('english'::regconfig, coalesce(tags::text, '')), 'C')
+        setweight(to_tsvector('english'::regconfig, coalesce(immutable_array_to_string(tags), '')), 'C')
     ) STORED
 );
 
