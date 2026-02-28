@@ -77,8 +77,7 @@ class SupabaseBackend(FolioBackend):
             case "replace":
                 new_content = content if content is not None else note.content
             case "append":
-                new_content = note.content + "
-" + content if content is not None else note.content
+                new_content = note.content + "\n" + content if content is not None else note.content
             case "section":
                 new_content = replace_section(note.content, target, content)
             case _:
