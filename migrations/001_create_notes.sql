@@ -82,7 +82,8 @@ BEGIN
             SELECT string_agg(plainto_tsquery('english', word)::text, ' | ')::tsquery
             INTO query_or
             FROM unnest(regexp_split_to_array(trim(search_term), '\s+')) AS word
-            WHERE word != '';
+            WHERE word != ''
+                AND plainto_tsquery('english', word)::text != '';
         END IF;
     END IF;
 
@@ -134,6 +135,7 @@ BEGIN
                     'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**') AS r_snippet
             FROM notes n
             WHERE has_search AND is_multi_word
+                AND query_or IS NOT NULL
                 AND (SELECT cnt FROM count_and) = 0
                 AND n.search_vector @@ query_or
                 AND n.sync_status != 'pending_delete'
