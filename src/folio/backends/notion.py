@@ -230,11 +230,13 @@ class NotionBackend(FolioBackend):
                 start_cursor=cursor,
                 page_size=100,
             )
-            active_blocks = []
             for b in response["results"]:
                 if not b.get("archived") and not b.get("in_trash"):
-                    active_blocks.append(b)
-            blocks.extend(active_blocks)
+                    blocks.append(b)
+                    # Recursively fetch rows for tables
+                    if b.get("type") == "table" and b.get("has_children"):
+                        rows = self._fetch_all_blocks(b["id"])
+                        blocks.extend(rows)
 
             if not response.get("has_more"):
                 break
@@ -927,6 +929,49 @@ def _markdown_to_blocks(markdown: str) -> List[dict]:
         line = lines[i]
         stripped = line.strip()
 
+        # --- Table ---
+        if stripped.startswith("|") and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if next_line.startswith("|") and all(c in "|- : " for c in next_line):
+                header_line = line
+                header_cells = [c.strip() for c in header_line.strip("|").split("|")]
+                num_cols = len(header_cells)
+
+                rows = []
+                # Header row
+                rows.append({
+                    "type": "table_row",
+                    "table_row": {"cells": [_parse_inline(c) for c in header_cells]},
+                })
+
+                i += 2  # skip header and separator
+
+                # Data rows
+                while i < len(lines) and lines[i].strip().startswith("|"):
+                    data_cells = [c.strip() for c in lines[i].strip("|").split("|")]
+                    # Pad or truncate cells to match header column count
+                    if len(data_cells) < num_cols:
+                        data_cells.extend([""] * (num_cols - len(data_cells)))
+                    elif len(data_cells) > num_cols:
+                        data_cells = data_cells[:num_cols]
+
+                    rows.append({
+                        "type": "table_row",
+                        "table_row": {"cells": [_parse_inline(c) for c in data_cells]},
+                    })
+                    i += 1
+
+                blocks.append({
+                    "type": "table",
+                    "table": {
+                        "table_width": num_cols,
+                        "has_column_header": True,
+                        "has_row_header": False,
+                        "children": rows,
+                    },
+                })
+                continue
+
         # --- Fenced code block ---
         if stripped.startswith("```"):
             lang = stripped[3:].strip() or "plain text"
@@ -1019,6 +1064,7 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
     lines: List[str] = []
     prev_type = ""
     list_index = 0
+    table_started = False
 
     for block in blocks:
         btype = block.get("type", "")
@@ -1041,6 +1087,18 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
             lines.append("")
 
         match btype:
+            case "table":
+                table_started = True
+                continue
+            case "table_row":
+                cells = data.get("cells", [])
+                row_str = "| " + " | ".join(_rt_to_md(c) for c in cells) + " |"
+                lines.append(row_str)
+                if table_started:
+                    # Insert separator after header row
+                    sep = "| " + " | ".join(["---"] * len(cells)) + " |"
+                    lines.append(sep)
+                    table_started = False
             case "heading_1":
                 lines.append(f"# {_rt_to_md(rt)}")
                 lines.append("")
@@ -1073,10 +1131,6 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
             case "divider":
                 lines.append("---")
                 lines.append("")
-            case "table_row":
-                cells = data.get("cells", [])
-                row_str = "| " + " | ".join(_rt_to_md(c) for c in cells) + " |"
-                lines.append(row_str)
             case _:
                 if rt:
                     lines.append(_rt_to_md(rt))
