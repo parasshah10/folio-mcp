@@ -159,8 +159,14 @@ class SupabaseBackend(FolioBackend):
         return result
 
     def delete(self, path: str) -> None:
-        # Verify exists
-        self.read(path)
+        # Verify exists and get external_id for cooldown
+        res = self.client.table("notes").select("external_id").eq("path", path).execute()
+        if not res.data:
+            raise FileNotFoundError(f"Note not found: {path}")
+            
+        ext_id = res.data[0].get("external_id")
+        if ext_id and self.sync_engine:
+            self.sync_engine.register_deletion(ext_id)
         
         if self.sync_engine:
             self.client.table("notes").update({"sync_status": "pending_delete"}).eq("path", path).execute()

@@ -39,6 +39,19 @@ class SyncEngine:
     def __init__(self, adapter: SyncAdapter, client: Client):
         self.adapter = adapter
         self.client = client
+        self._recently_deleted: dict[str, float] = {}  # external_id -> deletion timestamp
+
+    def register_deletion(self, external_id: str):
+        """Mark an external_id as recently deleted to ignore it in pull sync."""
+        if external_id:
+            self._recently_deleted[external_id] = time.time()
+
+    def _prune_recently_deleted(self):
+        """Remove expired entries from the cooldown set."""
+        now = time.time()
+        expired = [eid for eid, ts in self._recently_deleted.items() if now - ts > 15]
+        for eid in expired:
+            del self._recently_deleted[eid]
 
     def run_loop(self, interval_seconds: int = 30):
         logger.info(f"Starting Folio SyncEngine — pull only (interval: {interval_seconds}s)")
@@ -90,6 +103,7 @@ class SyncEngine:
 
     def pull_changes(self):
         """Pull remote changes from the external platform."""
+        self._prune_recently_deleted()
         state_res = self.client.table('sync_state').select('*').eq('id', 1).execute()
         if not state_res.data:
             logger.warning("SyncEngine: No sync_state found in database.")
@@ -113,6 +127,11 @@ class SyncEngine:
         new_last_sync = last_sync
         for ext_id, note, edited_at, in_trash in changes:
             try:
+                # Skip if this note was recently deleted locally
+                if ext_id in self._recently_deleted:
+                    logger.debug(f"SyncEngine: Skipping pull for {ext_id} (recently deleted locally)")
+                    continue
+
                 if edited_at > new_last_sync:
                     new_last_sync = edited_at
                     
@@ -130,7 +149,7 @@ class SyncEngine:
                         existing = self.client.table('notes').select('id, path, sync_status').eq('path', derived_path).execute()
 
                     # Don't overwrite notes with pending local changes
-                    if existing.data and existing.data[0].get('sync_status') == 'pending_push':
+                    if existing.data and existing.data[0].get('sync_status') in ('pending_push', 'pending_delete'):
                         logger.debug(f"SyncEngine: Skipping pull for {derived_path} due to pending local changes.")
                         continue
                     
