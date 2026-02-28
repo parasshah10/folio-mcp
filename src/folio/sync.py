@@ -67,6 +67,8 @@ class SyncEngine:
                         path=row['path'], 
                         content=row['content'], 
                         tags=row['tags'],
+                        created=datetime.fromisoformat(row['created_at']),
+                        updated=datetime.fromisoformat(row['updated_at']),
                         metadata=row.get('metadata', {})
                     )
                     
@@ -102,7 +104,12 @@ class SyncEngine:
             if in_trash:
                 self.client.table('notes').delete().eq('external_id', ext_id).execute()
             else:
-                existing = self.client.table('notes').select('id', 'path').eq('external_id', ext_id).execute()
+                existing = self.client.table('notes').select('id, path, sync_status').eq('external_id', ext_id).execute()
+                
+                # Don't overwrite notes with pending local changes
+                if existing.data and existing.data[0].get('sync_status') == 'pending_push':
+                    continue
+                
                 data = {
                     'path': note.path,
                     'title': note.title,
@@ -113,9 +120,13 @@ class SyncEngine:
                     'external_id': ext_id,
                     'external_edited_at': edited_at.isoformat(),
                     'sync_status': 'synced',
-                    'updated_at': datetime.now(timezone.utc).isoformat()
+                    'created_at': note.created.isoformat(),
+                    'updated_at': note.updated.isoformat(),
+                    'last_synced_at': datetime.now(timezone.utc).isoformat()
                 }
                 if existing.data:
+                    # Don't overwrite created_at on existing notes
+                    data.pop('created_at', None)
                     self.client.table('notes').update(data).eq('external_id', ext_id).execute()
                 else:
                     self.client.table('notes').insert(data).execute()
