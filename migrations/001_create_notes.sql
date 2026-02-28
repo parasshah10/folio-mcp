@@ -83,7 +83,7 @@ BEGIN
             'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**'
         ) AS snippet
     FROM notes n,
-        plainto_tsquery('english', search_term) q
+        websearch_to_tsquery('english'::regconfig, search_term) q
     WHERE n.search_vector @@ q
         AND n.sync_status != 'pending_delete'
         AND (filter_folder IS NULL OR n.folder = filter_folder)
