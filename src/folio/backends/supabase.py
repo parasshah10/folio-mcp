@@ -29,6 +29,15 @@ class SupabaseBackend(FolioBackend):
                 if operation == "create":
                     note = kwargs["note"]
                     self.notion.create(note)
+                    # Resolve the Notion page_id from the backend's internal cache
+                    ext_id = self.notion._cache.get(note.path)
+                    if ext_id:
+                        self.client.table("notes").update({
+                            "external_id": ext_id,
+                            "sync_status": "synced",
+                            "last_synced_at": datetime.now(timezone.utc).isoformat()
+                        }).eq("path", note.path).execute()
+                        return
                 elif operation == "update":
                     self.notion.update(
                         path=kwargs["path"],
