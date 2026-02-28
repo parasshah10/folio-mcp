@@ -72,35 +72,83 @@ RETURNS TABLE (
 ) AS $$
 DECLARE
     has_search BOOLEAN := (search_term IS NOT NULL AND search_term != '');
+    is_multi_word BOOLEAN := (search_term ~ '\s+');
+    query_and tsquery;
+    query_or tsquery;
 BEGIN
+    IF has_search THEN
+        query_and := websearch_to_tsquery('english', search_term);
+        IF is_multi_word THEN
+            SELECT string_agg(plainto_tsquery('english', word)::text, ' | ')::tsquery
+            INTO query_or
+            FROM unnest(regexp_split_to_array(trim(search_term), '\s+')) AS word
+            WHERE word != '';
+        END IF;
+    END IF;
+
     RETURN QUERY
     SELECT
-        n.path,
-        n.title,
-        n.tags,
-        n.updated_at,
-        n.size_tokens,
-        CASE WHEN has_search
-             THEN ts_rank(n.search_vector, websearch_to_tsquery('english', search_term))
-             ELSE 0.0
-        END::REAL AS score,
-        CASE WHEN has_search
-             THEN ts_headline('english', n.content,
-                  websearch_to_tsquery('english', search_term),
-                  'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**')
-             ELSE left(n.content, 150)
-        END AS snippet
-    FROM notes n
-    WHERE
-        (NOT has_search OR n.search_vector @@ websearch_to_tsquery('english', search_term))
-        AND n.sync_status != 'pending_delete'
-        AND (filter_folder IS NULL OR n.folder = filter_folder)
-        AND (filter_tags IS NULL OR n.tags @> filter_tags)
-        AND (filter_since IS NULL OR n.updated_at > filter_since)
+        combined.r_path,
+        combined.r_title,
+        combined.r_tags,
+        combined.r_updated_at,
+        combined.r_size_tokens,
+        combined.r_score,
+        combined.r_snippet
+    FROM (
+        WITH and_results AS (
+            SELECT
+                n.path AS r_path,
+                n.title AS r_title,
+                n.tags AS r_tags,
+                n.updated_at AS r_updated_at,
+                n.size_tokens AS r_size_tokens,
+                CASE WHEN has_search
+                    THEN ts_rank(n.search_vector, query_and)
+                    ELSE 0.0
+                END::REAL AS r_score,
+                CASE WHEN has_search
+                    THEN ts_headline('english', n.content, query_and,
+                        'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**')
+                    ELSE left(n.content, 150)
+                END AS r_snippet
+            FROM notes n
+            WHERE (NOT has_search OR n.search_vector @@ query_and)
+                AND n.sync_status != 'pending_delete'
+                AND (filter_folder IS NULL OR n.folder = filter_folder)
+                AND (filter_tags IS NULL OR n.tags @> filter_tags)
+                AND (filter_since IS NULL OR n.updated_at > filter_since)
+        ),
+        count_and AS (
+            SELECT count(*) as cnt FROM and_results WHERE r_score > 0 OR NOT has_search
+        ),
+        or_results AS (
+            SELECT
+                n.path AS r_path,
+                n.title AS r_title,
+                n.tags AS r_tags,
+                n.updated_at AS r_updated_at,
+                n.size_tokens AS r_size_tokens,
+                (ts_rank(n.search_vector, query_or) * 0.5)::REAL AS r_score,
+                ts_headline('english', n.content, query_or,
+                    'MaxFragments=1, MaxWords=30, MinWords=10, StartSel=**, StopSel=**') AS r_snippet
+            FROM notes n
+            WHERE has_search AND is_multi_word
+                AND (SELECT cnt FROM count_and) = 0
+                AND n.search_vector @@ query_or
+                AND n.sync_status != 'pending_delete'
+                AND (filter_folder IS NULL OR n.folder = filter_folder)
+                AND (filter_tags IS NULL OR n.tags @> filter_tags)
+                AND (filter_since IS NULL OR n.updated_at > filter_since)
+        )
+        SELECT * FROM and_results
+        UNION ALL
+        SELECT * FROM or_results
+    ) combined
     ORDER BY
-        CASE WHEN sort_by = 'recent' THEN extract(epoch FROM n.updated_at) ELSE NULL END DESC NULLS LAST,
-        CASE WHEN sort_by != 'recent' AND has_search THEN ts_rank(n.search_vector, websearch_to_tsquery('english', search_term)) ELSE NULL END DESC NULLS LAST,
-        n.updated_at DESC
+        CASE WHEN sort_by = 'recent' THEN extract(epoch FROM combined.r_updated_at) ELSE NULL END DESC NULLS LAST,
+        CASE WHEN sort_by != 'recent' THEN combined.r_score ELSE NULL END DESC NULLS LAST,
+        combined.r_updated_at DESC
     LIMIT max_results;
 END;
 $$ LANGUAGE plpgsql STABLE;
