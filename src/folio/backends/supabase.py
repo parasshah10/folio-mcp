@@ -38,6 +38,8 @@ class SupabaseBackend(FolioBackend):
                 "tags": note.tags,
                 "folder": folder,
                 "size_tokens": note.size_tokens,
+                "created_at": note.created.isoformat(),
+                "updated_at": note.updated.isoformat(),
                 "sync_status": "pending_push" if self.sync_engine else "synced",
                 "metadata": note.metadata
             }
@@ -133,7 +135,7 @@ class SupabaseBackend(FolioBackend):
         if folder:
             query = query.eq("folder", folder.rstrip("/"))
             
-        res = query.order("updated_at", desc=True).execute()
+        res = query.order("updated_at", desc=True).limit(10000).execute()
         
         return [
             NoteSummary(
@@ -189,8 +191,22 @@ class SupabaseBackend(FolioBackend):
         raise RuntimeError("Undo not yet supported for Supabase backend. Row-level version history coming soon.")
 
     def export_all(self) -> list[Note]:
-        res = self.client.table("notes").select("*").neq("sync_status", "pending_delete").execute()
-        return [self._row_to_note(row) for row in res.data]
+        all_notes = []
+        offset = 0
+        batch_size = 1000
+        while True:
+            res = (
+                self.client.table("notes")
+                .select("*")
+                .neq("sync_status", "pending_delete")
+                .range(offset, offset + batch_size - 1)
+                .execute()
+            )
+            all_notes.extend(self._row_to_note(row) for row in res.data)
+            if len(res.data) < batch_size:
+                break
+            offset += batch_size
+        return all_notes
 
     def import_all(self, notes: list[Note]) -> None:
         for note in notes:
@@ -201,6 +217,8 @@ class SupabaseBackend(FolioBackend):
                 "tags": note.tags,
                 "folder": note.folder,
                 "size_tokens": note.size_tokens,
+                "created_at": note.created.isoformat(),
+                "updated_at": note.updated.isoformat(),
                 "sync_status": "pending_push" if self.sync_engine else "synced",
                 "metadata": note.metadata
             }
