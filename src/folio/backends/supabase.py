@@ -1,0 +1,232 @@
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Any
+
+from supabase import create_client, Client
+import postgrest.exceptions
+
+from folio.backends import FolioBackend
+from folio.config import SupabaseConfig
+from folio.models import Note, NoteSummary, SearchResult
+from folio.sections import extract_section, replace_section
+
+class SupabaseBackend(FolioBackend):
+    def __init__(self, config: SupabaseConfig, sync_engine=None):
+        self.client: Client = create_client(config.url, config.key)
+        self.sync_engine = sync_engine
+
+    def _row_to_note(self, row: dict) -> Note:
+        return Note(
+            path=row["path"],
+            content=row.get("content", ""),
+            tags=row.get("tags", []),
+            created=datetime.fromisoformat(row["created_at"]),
+            updated=datetime.fromisoformat(row["updated_at"]),
+            metadata=row.get("metadata", {})
+        )
+
+    def create(self, note: Note) -> Note:
+        try:
+            # Force pre-computation of dynamic properties
+            title = note.title
+            folder = note.folder
+            
+            data = {
+                "path": note.path,
+                "title": title,
+                "content": note.content,
+                "tags": note.tags,
+                "folder": folder,
+                "size_tokens": note.size_tokens,
+                "sync_status": "pending_push" if self.sync_engine else "synced",
+                "metadata": note.metadata
+            }
+            res = self.client.table("notes").insert(data).execute()
+            return self._row_to_note(res.data[0])
+        except postgrest.exceptions.APIError as e:
+            if "duplicate key value" in str(e):
+                raise FileExistsError(f"Note already exists: {note.path}")
+            raise RuntimeError(f"Database error: {e}")
+
+    def read(self, path: str, section: str | None = None) -> Note:
+        res = self.client.table("notes").select("*").eq("path", path).execute()
+        if not res.data:
+            raise FileNotFoundError(f"Note not found: {path}")
+            
+        note = self._row_to_note(res.data[0])
+        
+        if section:
+            section_content = extract_section(note.content, section)
+            if section_content is None:
+                raise FileNotFoundError(f"Section '{section}' not found in {path}")
+            note = note.model_copy(update={"content": section_content})
+            
+        return note
+
+    def update(
+        self,
+        path: str,
+        content: str | None,
+        mode: str = "replace",
+        target: str | None = None,
+        tags: list[str] | None = None,
+    ) -> Note:
+        note = self.read(path)
+        
+        match mode:
+            case "replace":
+                new_content = content if content is not None else note.content
+            case "append":
+                new_content = note.content + "
+" + content if content is not None else note.content
+            case "section":
+                new_content = replace_section(note.content, target, content)
+            case _:
+                raise ValueError(f"Invalid mode: {mode}")
+
+        updated_note = note.model_copy(update={
+            "content": new_content,
+            "tags": tags if tags is not None else note.tags,
+            "updated": datetime.now(timezone.utc)
+        })
+
+        data = {
+            "content": updated_note.content,
+            "tags": updated_note.tags,
+            "title": updated_note.title, # Re-derive in case frontmatter changed
+            "size_tokens": updated_note.size_tokens,
+            "sync_status": "pending_push" if self.sync_engine else "synced",
+            "updated_at": updated_note.updated.isoformat()
+        }
+        
+        res = self.client.table("notes").update(data).eq("path", path).execute()
+        return self._row_to_note(res.data[0])
+
+    def delete(self, path: str) -> None:
+        # Verify exists
+        self.read(path)
+        
+        if self.sync_engine:
+            self.client.table("notes").update({"sync_status": "pending_delete"}).eq("path", path).execute()
+        else:
+            self.client.table("notes").delete().eq("path", path).execute()
+
+    def move(self, source: str, target: str) -> Note:
+        note = self.read(source)
+        new_folder = "/".join(target.split("/")[:-1]) if "/" in target else ""
+        
+        data = {
+            "path": target,
+            "folder": new_folder,
+            "sync_status": "pending_push" if self.sync_engine else "synced",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            res = self.client.table("notes").update(data).eq("path", source).execute()
+            return self._row_to_note(res.data[0])
+        except postgrest.exceptions.APIError as e:
+            if "duplicate key value" in str(e):
+                raise FileExistsError(f"Target already exists: {target}")
+            raise RuntimeError(f"Database error: {e}")
+
+    def list(self, folder: str | None = None) -> list[NoteSummary]:
+        query = self.client.table("notes").select("path, title, tags, updated_at, size_tokens").neq("sync_status", "pending_delete")
+        if folder:
+            query = query.eq("folder", folder.rstrip("/"))
+            
+        res = query.order("updated_at", desc=True).execute()
+        
+        return [
+            NoteSummary(
+                path=row["path"],
+                title=row["title"],
+                tags=row["tags"],
+                updated=datetime.fromisoformat(row["updated_at"]),
+                size_tokens=row["size_tokens"],
+                has_previous=False
+            ) for row in res.data
+        ]
+
+    def search(
+        self,
+        query: str,
+        tags: list[str] | None = None,
+        folder: str | None = None,
+        sort: str = "relevance",
+        updated_since: str | None = None,
+        limit: int = 10,
+    ) -> list[SearchResult]:
+        
+        cutoff = _parse_since(updated_since).isoformat() if updated_since else None
+        
+        res = self.client.rpc('search_notes', {
+            'search_term': query,
+            'filter_folder': folder.rstrip("/") if folder else None,
+            'filter_tags': tags,
+            'filter_since': cutoff,
+            'sort_by': sort,
+            'max_results': limit
+        }).execute()
+
+        results = []
+        for row in res.data:
+            summary = NoteSummary(
+                path=row["path"],
+                title=row["title"],
+                tags=row["tags"],
+                updated=datetime.fromisoformat(row["updated_at"]),
+                size_tokens=row["size_tokens"],
+                has_previous=False
+            )
+            results.append(SearchResult(
+                note=summary,
+                snippet=row["snippet"],
+                score=row["score"]
+            ))
+            
+        return results
+
+    def undo(self, path: str) -> Note:
+        raise RuntimeError("Undo not yet supported for Supabase backend. Row-level version history coming soon.")
+
+    def export_all(self) -> list[Note]:
+        res = self.client.table("notes").select("*").neq("sync_status", "pending_delete").execute()
+        return [self._row_to_note(row) for row in res.data]
+
+    def import_all(self, notes: list[Note]) -> None:
+        for note in notes:
+            data = {
+                "path": note.path,
+                "title": note.title,
+                "content": note.content,
+                "tags": note.tags,
+                "folder": note.folder,
+                "size_tokens": note.size_tokens,
+                "sync_status": "pending_push" if self.sync_engine else "synced",
+                "metadata": note.metadata
+            }
+            self.client.table("notes").upsert(data, on_conflict="path").execute()
+
+def _parse_since(value: str) -> datetime:
+    """Parse a time filter like '7d', '24h', 'today', or ISO date."""
+    now = datetime.now(timezone.utc)
+    if value.lower() == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    match = re.match(r"^(\d+)([hdwm])$", value.lower())
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        delta = {
+            "h": timedelta(hours=amount),
+            "d": timedelta(days=amount),
+            "w": timedelta(weeks=amount),
+            "m": timedelta(days=amount * 30),
+        }[unit]
+        return now - delta
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        raise ValueError(f"Invalid time filter: '{value}'. Use relative ('7d', '24h', 'today') or ISO date.")

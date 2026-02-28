@@ -8,6 +8,7 @@ dependencies = [
     "python-frontmatter",
     "gitpython",
     "notion-client",
+    "supabase",
 ]
 
 [project.scripts]

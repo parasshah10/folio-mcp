@@ -27,6 +27,19 @@ class NotionConfig(BaseModel):
     database_id: str = ""  # single-database approach
 
 
+class SupabaseConfig(BaseModel):
+    """Supabase API settings."""
+    
+    url: str = ""
+    key: str = ""
+
+class SyncConfig(BaseModel):
+    """Background synchronization settings."""
+    
+    backend: str = "none"
+    interval_seconds: int = 30
+
+
 class SearchConfig(BaseModel):
     """Search behavior settings."""
 
@@ -37,9 +50,11 @@ class SearchConfig(BaseModel):
 class FolioConfig(BaseModel):
     """Root configuration. Selects backend and configures each one."""
 
-    backend: str = Field(default="local", description="'local' or 'notion'")
+    backend: str = Field(default="local", description="'local', 'notion', or 'supabase'")
     local: LocalConfig = Field(default_factory=LocalConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
+    supabase: SupabaseConfig = Field(default_factory=SupabaseConfig)
+    sync: SyncConfig = Field(default_factory=SyncConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     warn_tokens: int = 2000
 
@@ -75,6 +90,14 @@ class FolioConfig(BaseModel):
                 api_key=os.environ.get("NOTION_API_KEY", ""),
                 database_id=os.environ.get("NOTION_DATABASE_ID", ""),
             ),
+            supabase=SupabaseConfig(
+                url=os.environ.get("SUPABASE_URL", ""),
+                key=os.environ.get("SUPABASE_KEY", ""),
+            ),
+            sync=SyncConfig(
+                backend=os.environ.get("FOLIO_SYNC", "none"),
+                interval_seconds=int(os.environ.get("FOLIO_SYNC_INTERVAL", "30")),
+            ),
             search=SearchConfig(
                 max_results=int(os.environ.get("FOLIO_MAX_RESULTS", "20")),
                 recency_boost=float(os.environ.get("FOLIO_RECENCY_BOOST", "0.3")),
@@ -96,6 +119,12 @@ class FolioConfig(BaseModel):
                 root.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 errors.append(f"Failed to create notes directory {root}: {e}")
-        elif self.backend not in ("local", "notion"):
-            errors.append(f"Unknown backend: {self.backend}. Use 'local' or 'notion'.")
+        elif self.backend == "supabase":
+            if not self.supabase.url or not self.supabase.key:
+                errors.append("SUPABASE_URL and SUPABASE_KEY are required for Supabase backend")
+            if self.sync.backend == "notion":
+                if not self.notion.api_key or not self.notion.database_id:
+                    errors.append("NOTION_API_KEY and NOTION_DATABASE_ID required for Notion sync via Supabase")
+        elif self.backend not in ("local", "notion", "supabase"):
+            errors.append(f"Unknown backend: {self.backend}. Use 'local', 'notion', or 'supabase'.")
         return errors
