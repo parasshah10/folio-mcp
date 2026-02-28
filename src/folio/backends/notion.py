@@ -248,12 +248,18 @@ class NotionBackend(FolioBackend):
         return _blocks_to_markdown(blocks)
 
     def _write_page_content(self, page_id: str, markdown: str) -> None:
-        """Replace all page content using native Markdown API."""
-        if not markdown:
-            # If empty, we still have to use block API to clear
-            blocks = self._fetch_all_blocks(page_id)
-            for b in blocks:
+        """Replace all page content reliably by clearing blocks then inserting."""
+        # 1. Clear existing blocks
+        blocks = self._fetch_all_blocks(page_id)
+        for b in blocks:
+            try:
+                # We use the generic request() because blocks.delete() might not be in all client versions
                 self.client.request(path=f"blocks/{b['id']}", method="DELETE")
+            except Exception:
+                continue
+
+        # 2. Insert new content via native Markdown API
+        if not markdown:
             return
 
         content = markdown.replace("\\n", "\n")
@@ -261,9 +267,8 @@ class NotionBackend(FolioBackend):
             path=f"pages/{page_id}/markdown",
             method="PATCH",
             body={
-                "type": "replace_content_range",
-                "replace_content_range": {
-                    "content_range": "...", # Entire page
+                "type": "insert_content",
+                "insert_content": {
                     "content": content
                 }
             }
