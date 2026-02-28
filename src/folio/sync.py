@@ -187,8 +187,8 @@ class SyncEngine:
             return
             
         last_recon = datetime.fromisoformat(state_res.data[0]['last_reconciled_at'])
-        if (datetime.now(timezone.utc) - last_recon).total_seconds() < 60:
-            return # Only reconcile every 60 seconds
+        if (datetime.now(timezone.utc) - last_recon).total_seconds() < 120:
+            return # Only reconcile every 120 seconds (2 minutes)
             
         logger.info("SyncEngine: Running full reconciliation...")
         try:
