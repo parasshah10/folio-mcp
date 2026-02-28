@@ -110,6 +110,7 @@ class SyncEngine:
             
         logger.info(f"SyncEngine: Found {len(changes)} remote changes.")
         
+        new_last_sync = last_sync
         for ext_id, note, edited_at, in_trash in changes:
             try:
                 if edited_at > new_last_sync:
