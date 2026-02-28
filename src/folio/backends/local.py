@@ -6,7 +6,7 @@ import re
 import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import frontmatter
 from git import Repo, InvalidGitRepositoryError, GitCommandError
@@ -158,7 +158,7 @@ class LocalBackend(FolioBackend):
     # Git helpers
     # ------------------------------------------------------------------
 
-    def _git_commit(self, message: str, paths: list[str] | None = None) -> None:
+    def _git_commit(self, message: str, paths: List[str] | None = None) -> None:
         """Stage and commit. No-op if git is disabled."""
         if not self._repo or not self.git_enabled:
             return
@@ -216,7 +216,7 @@ class LocalBackend(FolioBackend):
         content: str | None,                    
         mode: str = "replace",
         target: str | None = None,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
     ) -> Note:
         note = self._read_file(path)
         now = datetime.now(timezone.utc)
@@ -300,7 +300,7 @@ class LocalBackend(FolioBackend):
     # Backend methods: List
     # ------------------------------------------------------------------
 
-    def list(self, folder: str | None = None) -> list[NoteSummary]:
+    def list(self, folder: str | None = None) -> List[NoteSummary]:
         if folder:
             scan_dir = self._resolve(folder)
             if not scan_dir.exists() or not scan_dir.is_dir():
@@ -332,16 +332,16 @@ class LocalBackend(FolioBackend):
     def search(
         self,
         query: str,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
         folder: str | None = None,
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
-    ) -> list[SearchResult]:
+    ) -> List[SearchResult]:
         query_lower = query.lower()
         query_terms = query_lower.split()
         cutoff = _parse_since(updated_since) if updated_since else None
-        results: list[SearchResult] = []
+        results: List[SearchResult] = []
 
         for path, entry in self._index.items():
             # --- Folder filter ---
@@ -448,7 +448,7 @@ class LocalBackend(FolioBackend):
     # Backend methods: Export / Import
     # ------------------------------------------------------------------
 
-    def export_all(self) -> list[Note]:
+    def export_all(self) -> List[Note]:
         notes = []
         for filepath in sorted(self.root.rglob("*.md")):
             rel = str(filepath.relative_to(self.root))
@@ -458,7 +458,7 @@ class LocalBackend(FolioBackend):
                 continue
         return notes
 
-    def import_all(self, notes: list[Note]) -> None:
+    def import_all(self, notes: List[Note]) -> None:
         for note in notes:
             filepath = self._resolve(note.path)
             if filepath.exists():
@@ -528,7 +528,7 @@ def _parse_since(value: str) -> datetime:
         )
 
 
-def _build_snippet(content_lower: str, terms: list[str], max_len: int = 150) -> str:
+def _build_snippet(content_lower: str, terms: List[str], max_len: int = 150) -> str:
     """Build a search snippet showing the first matching line with context."""
     lines = content_lower.split("\n")
 

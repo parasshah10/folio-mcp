@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 from notion_client import Client as NotionClient
 from notion_client.errors import APIResponseError
@@ -160,7 +160,7 @@ class NotionBackend(FolioBackend):
                     return title_arr[0].get("plain_text", "Untitled")
         return "Untitled"
 
-    def _get_tags_from_page(self, page: dict) -> list[str]:
+    def _get_tags_from_page(self, page: dict) -> List[str]:
         """Extract tags from a page object."""
         prop = page.get("properties", {}).get("tags", {})
         options = prop.get("multi_select", [])
@@ -210,9 +210,9 @@ class NotionBackend(FolioBackend):
     # Page content I/O
     # ------------------------------------------------------------------
 
-    def _fetch_all_blocks(self, page_id: str) -> list[dict]:
+    def _fetch_all_blocks(self, page_id: str) -> List[dict]:
         """Fetch all block objects for a page, skipping archived ones."""
-        blocks: list[dict] = []
+        blocks: List[dict] = []
         cursor = None
 
         while True:
@@ -260,7 +260,7 @@ class NotionBackend(FolioBackend):
         blocks = self._fetch_all_blocks(page_id)
         self._delete_blocks([b["id"] for b in blocks])
 
-    def _delete_blocks(self, block_ids: list[str]) -> None:
+    def _delete_blocks(self, block_ids: List[str]) -> None:
         """Delete specific blocks one-by-one."""
         for block_id in block_ids:
             try:
@@ -271,7 +271,7 @@ class NotionBackend(FolioBackend):
             except APIResponseError as e:
                 raise RuntimeError(f"Failed to delete block {block_id}: {str(e)}")
 
-    def _insert_blocks(self, parent_id: str, blocks: list[dict], after_id: str | None = None) -> None:
+    def _insert_blocks(self, parent_id: str, blocks: List[dict], after_id: str | None = None) -> None:
         """Insert blocks after a specific block ID, or at end if None."""
         for i in range(0, len(blocks), 100):
             batch = blocks[i : i + 100]
@@ -291,7 +291,7 @@ class NotionBackend(FolioBackend):
             if i + 100 < len(blocks) and resp.get("results"):
                 after_id = resp["results"][-1]["id"]
 
-    def _append_blocks(self, page_id: str, blocks: list[dict]) -> None:
+    def _append_blocks(self, page_id: str, blocks: List[dict]) -> None:
         """Append blocks to a page, batching in groups of 100 (API limit)."""
         self._insert_blocks(page_id, blocks)
 
@@ -435,7 +435,7 @@ class NotionBackend(FolioBackend):
         content: str | None,                    # ← was: str
         mode: str = "replace",
         target: str | None = None,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
     ) -> Note:
         page_id = self._resolve_page_id(path)
 
@@ -540,7 +540,7 @@ class NotionBackend(FolioBackend):
     # List
     # ------------------------------------------------------------------
 
-    def list(self, folder: str | None = None) -> list[NoteSummary]:
+    def list(self, folder: str | None = None) -> List[NoteSummary]:
         """List notes, optionally filtered by folder.
 
         Uses a database query with filter (not the cache) so we get
@@ -563,7 +563,7 @@ class NotionBackend(FolioBackend):
                 "rich_text": {"equals": folder.rstrip("/")},
             }
 
-        summaries: list[NoteSummary] = []
+        summaries: List[NoteSummary] = []
         cursor = None
 
         while True:
@@ -613,12 +613,12 @@ class NotionBackend(FolioBackend):
     def search(
         self,
         query: str,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
         folder: str | None = None,
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
-    ) -> list[SearchResult]:
+    ) -> List[SearchResult]:
         """Search notes by title, tags, folder, and time.
 
         Uses Notion's databases.query() with property filters only.
@@ -671,7 +671,7 @@ class NotionBackend(FolioBackend):
 
         pages = response.get("results", [])
         cutoff = _parse_since(updated_since) if updated_since else None
-        results: list[SearchResult] = []
+        results: List[SearchResult] = []
 
         # 3. Process results
         for page in pages:
@@ -729,13 +729,13 @@ class NotionBackend(FolioBackend):
     # Export / Import
     # ------------------------------------------------------------------
 
-    def export_all(self) -> list[Note]:
+    def export_all(self) -> List[Note]:
         """Export all notes as a list of Note objects.
 
         Fetches every page + its content. Useful for migration
         (e.g., Notion → local) or backup.
         """
-        notes: list[Note] = []
+        notes: List[Note] = []
         cursor = None
 
         while True:
@@ -767,7 +767,7 @@ class NotionBackend(FolioBackend):
 
         return notes
 
-    def import_all(self, notes: list[Note]) -> None:
+    def import_all(self, notes: List[Note]) -> None:
         """Import notes into the Notion database.
 
         Creates new pages for notes that don't exist.
@@ -861,12 +861,12 @@ _INLINE_RE = re.compile(
 )
 
 
-def _parse_inline(text: str) -> list[dict]:
+def _parse_inline(text: str) -> List[dict]:
     """Parse **bold**, *italic*, `code`, [text](url) into rich_text."""
     if not text:
         return [_text_segment("")]
 
-    segments: list[dict] = []
+    segments: List[dict] = []
     last_end = 0
 
     for m in _INLINE_RE.finditer(text):
@@ -888,10 +888,10 @@ def _parse_inline(text: str) -> list[dict]:
     return segments if segments else [_text_segment(text)]
 
 
-def _markdown_to_blocks(markdown: str) -> list[dict]:
+def _markdown_to_blocks(markdown: str) -> List[dict]:
     """Convert markdown string to Notion block objects."""
     lines = markdown.split("\n")
-    blocks: list[dict] = []
+    blocks: List[dict] = []
     i = 0
 
     while i < len(lines):
@@ -901,7 +901,7 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
         # --- Fenced code block ---
         if stripped.startswith("```"):
             lang = stripped[3:].strip() or "plain text"
-            code_lines: list[str] = []
+            code_lines: List[str] = []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code_lines.append(lines[i])
@@ -985,9 +985,9 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
     return blocks
 
 
-def _blocks_to_markdown(blocks: list[dict]) -> str:
+def _blocks_to_markdown(blocks: List[dict]) -> str:
     """Convert Notion blocks back to markdown."""
-    lines: list[str] = []
+    lines: List[str] = []
     prev_type = ""
 
     for block in blocks:
@@ -1045,9 +1045,9 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
     return result.strip()
 
 
-def _rt_to_md(rich_text: list[dict]) -> str:
+def _rt_to_md(rich_text: List[dict]) -> str:
     """Convert Notion rich_text array to markdown with formatting."""
-    parts: list[str] = []
+    parts: List[str] = []
     for seg in rich_text:
         text = seg.get("text", {}).get("content", "")
         ann = seg.get("annotations", {})
@@ -1068,12 +1068,12 @@ def _rt_to_md(rich_text: list[dict]) -> str:
     return "".join(parts)
 
 
-def _rt_to_plain(rich_text: list[dict]) -> str:
+def _rt_to_plain(rich_text: List[dict]) -> str:
     """Extract plain text from rich_text (no formatting)."""
     return "".join(seg.get("text", {}).get("content", "") for seg in rich_text)
 
 
-def _blocks_to_plain(blocks: list[dict]) -> str:
+def _blocks_to_plain(blocks: List[dict]) -> str:
     """Convert Notion blocks to a single plain text string for searching."""
     text_parts = []
     for block in blocks:

@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, List
 
 from supabase import create_client, Client
 import postgrest.exceptions
@@ -71,7 +71,7 @@ class SupabaseBackend(FolioBackend):
         content: str | None,
         mode: str = "replace",
         target: str | None = None,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
     ) -> Note:
         note = self.read(path)
         
@@ -130,7 +130,7 @@ class SupabaseBackend(FolioBackend):
                 raise FileExistsError(f"Target already exists: {target}")
             raise RuntimeError(f"Database error: {e}")
 
-    def list(self, folder: str | None = None) -> list[NoteSummary]:
+    def list(self, folder: str | None = None) -> List[NoteSummary]:
         query = self.client.table("notes").select("path, title, tags, updated_at, size_tokens").neq("sync_status", "pending_delete")
         if folder:
             query = query.eq("folder", folder.rstrip("/"))
@@ -151,12 +151,12 @@ class SupabaseBackend(FolioBackend):
     def search(
         self,
         query: str,
-        tags: list[str] | None = None,
+        tags: List[str] | None = None,
         folder: str | None = None,
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
-    ) -> list[SearchResult]:
+    ) -> List[SearchResult]:
         
         cutoff = _parse_since(updated_since).isoformat() if updated_since else None
         
@@ -190,7 +190,7 @@ class SupabaseBackend(FolioBackend):
     def undo(self, path: str) -> Note:
         raise RuntimeError("Undo not yet supported for Supabase backend. Row-level version history coming soon.")
 
-    def export_all(self) -> list[Note]:
+    def export_all(self) -> List[Note]:
         all_notes = []
         offset = 0
         batch_size = 1000
@@ -208,7 +208,7 @@ class SupabaseBackend(FolioBackend):
             offset += batch_size
         return all_notes
 
-    def import_all(self, notes: list[Note]) -> None:
+    def import_all(self, notes: List[Note]) -> None:
         for note in notes:
             data = {
                 "path": note.path,
