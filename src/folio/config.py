@@ -37,7 +37,7 @@ class SyncConfig(BaseModel):
     """Background synchronization settings."""
     
     backend: str = "none"
-    interval_seconds: int = 30
+    interval_seconds: int = 10
 
 
 class SearchConfig(BaseModel):

@@ -110,7 +110,6 @@ class SyncEngine:
             
         logger.info(f"SyncEngine: Found {len(changes)} remote changes.")
         
-        new_last_sync = last_sync
         for ext_id, note, edited_at, in_trash in changes:
             try:
                 if edited_at > new_last_sync:
@@ -123,18 +122,19 @@ class SyncEngine:
                     # Match by external_id
                     existing = self.client.table('notes').select('id, path, sync_status').eq('external_id', ext_id).execute()
                     
+                    derived_path = note.path
                     if not existing.data:
                         # Fallback: Match by path (to link existing unlinked rows)
-                        logger.debug(f"SyncEngine: No external_id match for {note.path}, checking by path.")
-                        existing = self.client.table('notes').select('id, path, sync_status').eq('path', note.path).execute()
+                        logger.debug(f"SyncEngine: No external_id match for {derived_path}, checking by path.")
+                        existing = self.client.table('notes').select('id, path, sync_status').eq('path', derived_path).execute()
 
                     # Don't overwrite notes with pending local changes
                     if existing.data and existing.data[0].get('sync_status') == 'pending_push':
-                        logger.debug(f"SyncEngine: Skipping pull for {note.path} due to pending local changes.")
+                        logger.debug(f"SyncEngine: Skipping pull for {derived_path} due to pending local changes.")
                         continue
                     
                     data = {
-                        'path': note.path,
+                        'path': derived_path,
                         'title': note.title,
                         'content': note.content,
                         'tags': note.tags,
@@ -148,13 +148,22 @@ class SyncEngine:
                         'last_synced_at': datetime.now(timezone.utc).isoformat()
                     }
                     if existing.data:
-                        logger.info(f"SyncEngine: Updating/Linking note from Notion: {note.path}")
+                        logger.info(f"SyncEngine: Updating/Linking note from Notion: {derived_path}")
                         # Don't overwrite created_at on existing notes
                         data.pop('created_at', None)
                         # Use id or path to update to ensure we target the right row
                         self.client.table('notes').update(data).eq('id', existing.data[0]['id']).execute()
                     else:
-                        logger.info(f"SyncEngine: Inserting new note from Notion: {note.path}")
+                        # Path collision prevention for new notes
+                        existing_path = self.client.table('notes').select('id').eq('path', derived_path).execute()
+                        if existing_path.data:
+                            # Append short ID suffix to avoid collision
+                            base = derived_path.rsplit('.md', 1)[0]
+                            derived_path = f"{base}-{ext_id[:8]}.md"
+                            data['path'] = derived_path
+                            logger.info(f"SyncEngine: Path collision avoided, using {derived_path}")
+
+                        logger.info(f"SyncEngine: Inserting new note from Notion: {derived_path}")
                         self.client.table('notes').insert(data).execute()
             except Exception as e:
                 logger.error(f"SyncEngine: Failed to process change for {ext_id}: {e}")
@@ -171,14 +180,14 @@ class SyncEngine:
         }).eq('id', 1).execute()
 
     def reconcile(self):
-        """Run daily to detect items hard-deleted directly on the external platform."""
+        """Run frequently to detect items hard-deleted directly on the external platform."""
         state_res = self.client.table('sync_state').select('last_reconciled_at').eq('id', 1).execute()
         if not state_res.data:
             return
             
         last_recon = datetime.fromisoformat(state_res.data[0]['last_reconciled_at'])
-        if (datetime.now(timezone.utc) - last_recon).total_seconds() < 86400:
-            return # Only reconcile once a day
+        if (datetime.now(timezone.utc) - last_recon).total_seconds() < 60:
+            return # Only reconcile every 60 seconds
             
         logger.info("SyncEngine: Running full reconciliation...")
         try:
@@ -195,7 +204,7 @@ class SyncEngine:
         deleted_count = 0
         for row in res.data:
             if row['external_id'] not in active_ext_ids:
-                logger.info(f"SyncEngine: Reconcile deleting {row['path']} (not on remote)")
+                logger.info(f"SyncEngine: Reconciled deletion of {row['path']} (Notion page {row['external_id']} no longer active)")
                 self.client.table('notes').delete().eq('path', row['path']).execute()
                 deleted_count += 1
                 

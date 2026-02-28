@@ -22,6 +22,15 @@ from folio.models import Note, NoteSummary, SearchResult
 from folio.sections import extract_section, replace_section
 
 
+def _slugify_title(title: str) -> str:
+    """Convert a page title to a Folio-style path slug."""
+    slug = title.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
+    slug = re.sub(r"[\s_]+", "-", slug)  # Spaces/underscores → hyphens
+    slug = re.sub(r"-+", "-", slug).strip("-")  # Collapse hyphens
+    return f"{slug}.md" if slug else None
+
+
 class NotionBackend(FolioBackend):
 
     def __init__(self, config: NotionConfig):
@@ -343,18 +352,37 @@ class NotionBackend(FolioBackend):
 
     def _page_to_note(self, page: dict, content: str | None = None) -> Note:
         """Convert a Notion page + content into a Note."""
-        path = self._get_path(page) or "unknown.md"
+        folio_path = self._get_path(page)
         title = self._get_title_from_page(page)
-        tags = self._get_tags_from_page(page)
+        folder = self._get_folder(page)
+
+        # Path derivation for notes created directly in Notion UI
+        if not folio_path:
+            slug = _slugify_title(title) if title else f"untitled-{page['id'][:8]}.md"
+            folio_path = f"{folder}/{slug}" if folder else slug
+            
+            # Write derived path back to Notion so it's stable
+            try:
+                self.client.pages.update(
+                    page_id=page["id"],
+                    properties={
+                        "folio_path": {"rich_text": [{"text": {"content": folio_path}}]}
+                    }
+                )
+                self._cache[folio_path] = page["id"]
+            except Exception as e:
+                import logging
+                logging.getLogger("folio.notion").error(f"Failed to write derived path back to Notion: {e}")
+
         created, updated = self._get_timestamps(page)
 
         # Content is ALWAYS fetched fresh to avoid race conditions/stale data
         content = self._read_page_content(page["id"])
 
         return Note(
-            path=path,
+            path=folio_path,
             content=content,
-            tags=tags,
+            tags=self._get_tags_from_page(page),
             created=created,
             updated=updated,
             metadata={"title": title}
@@ -509,6 +537,7 @@ class NotionBackend(FolioBackend):
 
         # Update properties on the existing page
         props: dict[str, Any] = {
+            "Name": {"title": [{"text": {"content": new_title}}]},
             "folio_path": {
                 "rich_text": [{"text": {"content": target}}]
             },
