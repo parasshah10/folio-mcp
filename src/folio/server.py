@@ -141,16 +141,39 @@ def folio(
                     return {"error": "path is required for create"}
                 if content is None:
                     return {"error": "content is required for create"}
-                note = Note(path=path, content=content, tags=tags or [])
-                result = backend.create(note)
-                return _note_response(result, status="created")
+                try:
+                    note = Note(path=path, content=content, tags=tags or [])
+                    result = backend.create(note)
+                    return _note_response(result, status="created")
+                except FileExistsError:
+                    existing = backend.read(path)
+                    return {
+                        "error": "Note already exists. Use update to modify.",
+                        "existing": _note_response(existing, status="read")
+                    }
 
             # ------ READ ------
             case "read":
                 if not path:
                     return {"error": "path is required for read"}
-                result = backend.read(path, section=section)
-                return _note_response(result, status="read")
+                try:
+                    result = backend.read(path, section=section)
+                    return _note_response(result, status="read")
+                except FileNotFoundError as e:
+                    # Check if it was the file or the section that was missing
+                    if section:
+                        try:
+                            # Try reading full note to see if file exists
+                            full_note = backend.read(path)
+                            from folio.sections import list_headings
+                            headings = list_headings(full_note.content)
+                            return {
+                                "error": f"Section '{section}' not found in {path}",
+                                "available_sections": [h["text"] for h in headings]
+                            }
+                        except FileNotFoundError:
+                            pass # Fall through to generic file not found
+                    raise e
 
             # ------ UPDATE ------
             case "update":
@@ -165,14 +188,28 @@ def folio(
                     return {"error": "content or tags required for update"}
                 if update_mode == "section" and content is None:
                     return {"error": "content is required for section mode"}
-                result = backend.update(
-                    path=path,
-                    content=content,
-                    mode=update_mode,
-                    target=target,
-                    tags=tags,
-                )
-                return _note_response(result, status="updated")
+                try:
+                    result = backend.update(
+                        path=path,
+                        content=content,
+                        mode=update_mode,
+                        target=target,
+                        tags=tags,
+                    )
+                    return _note_response(result, status="updated")
+                except FileNotFoundError as e:
+                    if update_mode == "section":
+                        try:
+                            full_note = backend.read(path)
+                            from folio.sections import list_headings
+                            headings = list_headings(full_note.content)
+                            return {
+                                "error": f"Section '{target}' not found",
+                                "available_sections": [h["text"] for h in headings]
+                            }
+                        except FileNotFoundError:
+                            pass
+                    raise e
                 
             # ------ DELETE ------
             case "delete":
@@ -187,8 +224,15 @@ def folio(
                     return {"error": "path is required for move"}
                 if not destination:
                     return {"error": "destination is required for move"}
-                result = backend.move(source=path, target=destination)
-                return _note_response(result, status="moved")
+                try:
+                    result = backend.move(source=path, target=destination)
+                    return _note_response(result, status="moved")
+                except FileExistsError:
+                    existing = backend.read(destination)
+                    return {
+                        "error": "Target already exists. Delete or rename it first.",
+                        "existing": _summary_dict(NoteSummary.from_note(existing))
+                    }
 
             # ------ LIST ------
             case "list":
