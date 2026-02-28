@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 import sys
+import logging
 from typing import Any, Dict, List, Optional, Annotated
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr
+)
+logger = logging.getLogger("folio.server")
 
 from fastmcp import FastMCP
 from pydantic import Field
