@@ -1018,16 +1018,27 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
     """Convert Notion blocks back to markdown."""
     lines: List[str] = []
     prev_type = ""
+    list_index = 0
 
     for block in blocks:
         btype = block.get("type", "")
         data = block.get(btype, {})
         rt = data.get("rich_text", [])
 
+        # Track list position for numbered lists
+        if btype == "numbered_list_item":
+            list_index += 1
+        else:
+            list_index = 0
+
         # Add blank line when switching away from list items
         if prev_type in ("bulleted_list_item", "numbered_list_item"):
             if btype not in ("bulleted_list_item", "numbered_list_item"):
                 lines.append("")
+
+        # Ensure a blank line after a table ends
+        if prev_type == "table_row" and btype != "table_row":
+            lines.append("")
 
         match btype:
             case "heading_1":
@@ -1046,7 +1057,7 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
             case "bulleted_list_item":
                 lines.append(f"- {_rt_to_md(rt)}")
             case "numbered_list_item":
-                lines.append(f"1. {_rt_to_md(rt)}")
+                lines.append(f"{list_index}. {_rt_to_md(rt)}")
             case "quote":
                 lines.append(f"> {_rt_to_md(rt)}")
                 lines.append("")
@@ -1062,6 +1073,10 @@ def _blocks_to_markdown(blocks: List[dict]) -> str:
             case "divider":
                 lines.append("---")
                 lines.append("")
+            case "table_row":
+                cells = data.get("cells", [])
+                row_str = "| " + " | ".join(_rt_to_md(c) for c in cells) + " |"
+                lines.append(row_str)
             case _:
                 if rt:
                     lines.append(_rt_to_md(rt))
