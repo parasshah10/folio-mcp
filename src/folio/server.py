@@ -197,14 +197,15 @@ def folio(
                         tags=tags,
                     )
                     return _note_response(result, status="updated")
-                except FileNotFoundError as e:
+                except (FileNotFoundError, ValueError) as e:
                     if update_mode == "section":
                         try:
+                            # If file exists, list headings to help caller
                             full_note = backend.read(path)
                             from folio.sections import list_headings
                             headings = list_headings(full_note.content)
                             return {
-                                "error": f"Section '{target}' not found",
+                                "error": f"Section '{target}' not found in {path}",
                                 "available_sections": [h["text"] for h in headings]
                             }
                         except FileNotFoundError:
