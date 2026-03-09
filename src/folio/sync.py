@@ -150,6 +150,17 @@ class SyncEngine:
                     }
                     if existing.data:
                         logger.info(f"SyncEngine: Updating/Linking note from Notion: {derived_path}")
+
+                        # Path collision prevention for renamed notes
+                        if existing.data[0]['path'] != derived_path:
+                            existing_path = self.client.table('notes').select('id').eq('path', derived_path).execute()
+                            if existing_path.data and existing_path.data[0]['id'] != existing.data[0]['id']:
+                                # Append short ID suffix to avoid collision
+                                base = derived_path.rsplit('.md', 1)[0]
+                                derived_path = f"{base}-{ext_id[:8]}.md"
+                                data['path'] = derived_path
+                                logger.info(f"SyncEngine: Update path collision avoided, using {derived_path}")
+
                         # Don't overwrite created_at on existing notes
                         data.pop('created_at', None)
                         # Use id or path to update to ensure we target the right row
@@ -162,7 +173,7 @@ class SyncEngine:
                             base = derived_path.rsplit('.md', 1)[0]
                             derived_path = f"{base}-{ext_id[:8]}.md"
                             data['path'] = derived_path
-                            logger.info(f"SyncEngine: Path collision avoided, using {derived_path}")
+                            logger.info(f"SyncEngine: Insert path collision avoided, using {derived_path}")
 
                         logger.info(f"SyncEngine: Inserting new note from Notion: {derived_path}")
                         self.client.table('notes').insert(data).execute()
