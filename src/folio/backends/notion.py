@@ -32,6 +32,8 @@ def _slugify_title(title: str) -> str:
     slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
     slug = re.sub(r"[\s_]+", "-", slug)  # Spaces/underscores → hyphens
     slug = re.sub(r"-+", "-", slug).strip("-")  # Collapse hyphens
+    slug = slug[:500]  # Truncate to avoid path length issues
+    slug = slug.strip("-")
     return f"{slug}.md" if slug else None
 
 
@@ -385,30 +387,38 @@ class NotionBackend(FolioBackend):
 
     def _page_to_note(self, page: dict, content: str | None = None) -> Note:
         """Convert a Notion page + content into a Note."""
-        folio_path = self._get_path(page)
+        current_folio_path = self._get_path(page)
         title = self._get_title_from_page(page)
         folder = self._get_folder(page)
 
-        if not folio_path:
-            slug = _slugify_title(title) if title else f"untitled-{page['id'][:8]}.md"
-            folio_path = f"{folder}/{slug}" if folder else slug
-            
+        # Strict Auto-Sync: Derive the expected path from Title and Folder
+        slug = _slugify_title(title) if title and title != "Untitled" else f"untitled-{page['id'][:8]}.md"
+        expected_path = f"{folder}/{slug}" if folder else slug
+
+        # If the path is missing or doesn't match the title/folder, update it.
+        if current_folio_path != expected_path:
             try:
                 self.client.pages.update(
                     page_id=page["id"],
                     properties={
-                        "folio_path": {"rich_text": [{"text": {"content": folio_path}}]}
+                        "folio_path": {"rich_text": [{"text": {"content": expected_path}}]}
                     }
                 )
-                self._cache[folio_path] = page["id"]
+                # Update the cache to point to the new path
+                if current_folio_path in self._cache:
+                    del self._cache[current_folio_path]
+                self._cache[expected_path] = page["id"]
+                current_folio_path = expected_path
             except Exception as e:
                 logger.error(f"Failed to write derived path back to Notion: {e}")
+                # Fallback to whatever we had if update fails, or expected path if none
+                current_folio_path = current_folio_path or expected_path
 
         created, updated = self._get_timestamps(page)
         content = self._read_page_content(page["id"])
 
         return Note(
-            path=folio_path,
+            path=current_folio_path,
             content=content,
             tags=self._get_tags_from_page(page),
             created=created,
