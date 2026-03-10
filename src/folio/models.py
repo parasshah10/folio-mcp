@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+import re
 
 
 class Note(BaseModel):
@@ -88,3 +89,34 @@ class SearchResult(BaseModel):
     note: NoteSummary
     snippet: str = Field(default="", description="Content excerpt showing match")
     score: float = Field(default=0.0, description="Relevance score 0-1")
+
+
+def slugify_title(title: str) -> str | None:
+    """Convert a page title to a Folio-style path slug.
+    Shared logic used by SyncEngine and Move actions to evaluate auto-linking."""
+    slug = title.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
+    slug = re.sub(r"[\s_]+", "-", slug)  # Spaces/underscores → hyphens
+    slug = re.sub(r"-+", "-", slug).strip("-")  # Collapse hyphens
+    slug = slug[:500]  # Truncate to avoid path length issues
+    slug = slug.strip("-")
+    return f"{slug}.md" if slug else None
+
+
+def evaluate_move_title(old_path: str, old_title: str, new_path: str) -> str:
+    """Determine the correct title after a move operation.
+    If the old title exactly matched the old path (Auto-Linked), derive a new title.
+    If it didn't match (Explicit), preserve the old title."""
+    old_slug = old_path.split("/")[-1]
+    expected_old_slug = slugify_title(old_title) if old_title and old_title != "Untitled" else None
+
+    is_untitled = old_slug.startswith("untitled-")
+    was_auto_linked = bool(expected_old_slug and old_slug == expected_old_slug)
+
+    if was_auto_linked or is_untitled:
+        # Auto-linked: Derive new title from the new path
+        new_stem = Path(new_path).stem
+        return new_stem.replace("-", " ").replace("_", " ").title()
+    else:
+        # Explicit: Preserve the old title
+        return old_title
