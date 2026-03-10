@@ -52,14 +52,15 @@ class SupabaseBackend(FolioBackend):
                 elif operation == "move":
                     self.notion.move(source=kwargs["source"], target=kwargs["target_path"])
                 
-                # Mark as synced in Supabase
-                path = kwargs.get("path") or kwargs.get("note", {}).path
-                if operation == "move":
-                    path = kwargs["target_path"]
-                self.client.table("notes").update({
-                    "sync_status": "synced",
-                    "last_synced_at": datetime.now(timezone.utc).isoformat()
-                }).eq("path", path).execute()
+                # Mark as synced in Supabase (unless it's a delete waiting for the reconciler)
+                if operation != "delete":
+                    path = kwargs.get("path") or kwargs.get("note", {}).path
+                    if operation == "move":
+                        path = kwargs["target_path"]
+                    self.client.table("notes").update({
+                        "sync_status": "synced",
+                        "last_synced_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("path", path).execute()
                 
             except Exception as e:
                 self.logger.error(f"Background Notion push failed ({operation} {kwargs.get('path', '')}): {e}")
