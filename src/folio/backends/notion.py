@@ -412,14 +412,27 @@ class NotionBackend(FolioBackend):
         title = self._get_title_from_page(page)
         folder = self._get_folder(page)
 
-        # Strict Auto-Sync: Derive the expected path from Title and Folder
-        slug = _slugify_title(title) if title and title != "Untitled" else None
-        if not slug:
-            slug = f"untitled-{page['id'][:8]}.md"
+        # Extract existing slug if present
+        existing_slug = None
+        if current_folio_path:
+            existing_slug = current_folio_path.split("/")[-1]
 
+        # Determine the correct slug:
+        # If no path exists, or if it's a temporary 'untitled-' placeholder, generate from title.
+        # Otherwise, respect the existing custom slug.
+        if not existing_slug or existing_slug.startswith("untitled-"):
+            slug = _slugify_title(title) if title and title != "Untitled" else None
+            if not slug:
+                slug = f"untitled-{page['id'][:8]}.md"
+        else:
+            slug = existing_slug
+
+        # Combine the Notion folder with the chosen slug
         expected_path = f"{folder}/{slug}" if folder else slug
 
-        # If the path is missing or doesn't match the title/folder, update it.
+        # If the path is missing or doesn't match the folder/slug, update it.
+        # This ensures folder moves sync, and untitled placeholders get resolved,
+        # but custom filenames are never aggressively overwritten.
         if current_folio_path != expected_path:
             try:
                 self.client.pages.update(
@@ -429,7 +442,7 @@ class NotionBackend(FolioBackend):
                     }
                 )
                 # Update the cache to point to the new path
-                if current_folio_path in self._cache:
+                if current_folio_path and current_folio_path in self._cache:
                     del self._cache[current_folio_path]
                 self._cache[expected_path] = page["id"]
                 current_folio_path = expected_path
