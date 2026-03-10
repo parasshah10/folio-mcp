@@ -14,6 +14,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("folio.server")
 
+from pathlib import Path
+
 from fastmcp import FastMCP
 from pydantic import Field
 
@@ -96,7 +98,7 @@ def folio(
         description="Markdown content. For section mode, provide only the section body — the heading is preserved automatically."
     )] = None,
     mode: Annotated[Optional[str], Field(
-        description="Update mode: 'replace' (default), 'append', or 'section'"
+        description="Update mode: 'replace' (default), 'append', 'prepend', or 'section'"
     )] = None,
     target: Annotated[Optional[str], Field(
         description="Heading name for mode='section' (no # prefix)"
@@ -113,9 +115,15 @@ def folio(
     section: Annotated[Optional[str], Field(
         description="Read only this section (heading text, no # prefix)"
     )] = None,
+    limit: Annotated[int, Field(
+        description="Max items to list (default 100). Only used with action='list'."
+    )] = 100,
+    offset: Annotated[int, Field(
+        description="Pagination offset. Only used with action='list'."
+    )] = 0,
 ) -> Dict[str, Any]:
     """Markdown notes in folders with tags and versioning.
-    Use append for running logs, section to refresh one heading body, replace to rewrite.
+    Use prepend for running logs, section to refresh one heading body, replace to rewrite.
 
     Examples:
         Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
@@ -180,8 +188,8 @@ def folio(
                 if not path:
                     return {"error": "path is required for update"}
                 update_mode = mode or "replace"
-                if update_mode not in ("replace", "append", "section"):
-                    return {"error": f"Invalid mode: {update_mode}. Use replace, append, or section."}
+                if update_mode not in ("replace", "append", "prepend", "section"):
+                    return {"error": f"Invalid mode: {update_mode}. Use replace, append, prepend, or section."}
                 if update_mode == "section" and not target:
                     return {"error": "target (heading name) is required for section mode"}
                 if content is None and tags is None:
@@ -237,13 +245,71 @@ def folio(
 
             # ------ LIST ------
             case "list":
-                notes = backend.list(folder=folder)
-                return {
-                    "status": "ok",
-                    "folder": folder or "/",
-                    "notes": [_summary_dict(n) for n in notes],
-                    "count": len(notes),
-                }
+                all_notes = backend.list()
+
+                # Check if the workspace uses folders at all
+                has_folders = any(n.path.count("/") > 0 for n in all_notes)
+
+                # Filter notes by folder if requested
+                if folder:
+                    folder_path = folder.strip("/")
+                    notes = [n for n in all_notes if str(Path(n.path).parent) == folder_path or (not folder_path and "/" not in n.path)]
+                else:
+                    notes = all_notes
+
+                # If no folder requested, and there are folders in the workspace, show the Root Map
+                if not folder and has_folders:
+                    from collections import defaultdict
+                    grouped = defaultdict(list)
+                    for n in notes:
+                        p = str(Path(n.path).parent) if "/" in n.path else ""
+                        grouped[p].append(n)
+
+                    # Sort folders by their most recently updated note, limit to top 100
+                    sorted_folders = sorted(
+                        grouped.items(),
+                        key=lambda x: max((n.updated for n in x[1])),
+                        reverse=True
+                    )[:100]
+
+                    lines = [f"Workspace Map (Showing {len(sorted_folders)} of {len(grouped)} folders):", ""]
+                    for f_name, f_notes in sorted_folders:
+                        # Sort by updated desc
+                        f_notes.sort(key=lambda x: x.updated, reverse=True)
+                        f_disp = f"{f_name}/" if f_name else "/"
+                        latest = [Path(n.path).name for n in f_notes[:3]]
+                        latest_str = ", ".join(latest)
+                        if len(f_notes) > 3:
+                            latest_str += "..."
+                        lines.append(f"{f_disp} ({len(f_notes)} notes) - Latest: {latest_str}")
+
+                    lines.append("")
+                    lines.append("Tip: Use `action='list', folder='<name>'` to zoom into a folder. Use `folio_search` to find older notes.")
+                    return {"status": "ok", "format": "text", "text": "\n".join(lines)}
+
+                # Otherwise, show Zoomed View for the folder (or flat workspace)
+                notes.sort(key=lambda x: x.updated, reverse=True)
+                total_notes = len(notes)
+                notes_page = notes[offset:offset+limit]
+
+                f_disp = f"{folder.strip('/')}/" if folder else "/"
+                lines = [f"Folder: {f_disp}"]
+                lines.append(f"Showing {len(notes_page)} notes (offset {offset}) of {total_notes} total. Use `folio_search` to find older notes.")
+                lines.append("")
+
+                for n in notes_page:
+                    filename = Path(n.path).name
+                    tag_str = f" [tags: {', '.join(n.tags)}]" if n.tags else ""
+                    # Convert to K if > 1000
+                    toks = f"{n.size_tokens/1000:.1f}k" if n.size_tokens > 1000 else str(n.size_tokens)
+                    updated = n.updated.strftime("%Y-%m-%d")
+                    lines.append(f"{filename} ({toks} tokens){tag_str} - Updated: {updated}")
+
+                if total_notes > offset + limit:
+                    lines.append("")
+                    lines.append(f"... {total_notes - (offset + limit)} more notes. Use `offset={offset + limit}` to view older notes.")
+
+                return {"status": "ok", "format": "text", "text": "\n".join(lines)}
 
             # ------ UNDO ------
             case "undo":
