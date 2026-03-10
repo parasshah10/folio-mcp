@@ -211,7 +211,7 @@ For a companion, it's not close.
 - **Smart Error Recovery** — Missing section? Returns `available_sections`. Duplicate note? Returns `existing` content. Oversized read? Injects `size_warning` with token count. Every error teaches the AI what to do next.
 - **Bidirectional Sync** — Background thread pulls Notion edits every 10 seconds, reconciles deletions every 2 minutes. Edit in Notion on your phone; your AI sees the change within seconds.
 - **Human-Readable Paths** — `journal/2026-02-28.md`, not `f336d0bc-b841-465b-8045-024475c079dd`. The AI constructs paths from logic, not lookups.
-- **Append Mode** — `mode='append'` adds content to the end of a note without reading it. One call, zero context waste. Perfect for running logs and journals.
+- **Append & Prepend Mode** — `mode='append'` and `mode='prepend'` add content to the ends of a note without reading it. One call, zero context waste. Perfect for running logs and journals.
 - **Tags, Folders, Versioning** — Organize notes with tags and directory structure. Local backend includes Git-backed undo for full state rollback.
 
 ## Quick Start & Setup
@@ -311,7 +311,7 @@ Folio's Supabase-first architecture ensures the AI never waits for Notion.
 ## Tool Reference
 
 ### `folio` — Read and Write Notes
-Performs targeted CRUD operations.
+Performs targeted CRUD operations, directory listing, and structural x-rays.
 
 **Examples (JSON syntax):**
 ```json
@@ -335,18 +335,38 @@ Performs targeted CRUD operations.
 ```json
 {
   "action": "read",
-  "path": "projects/folio.md"
+  "path": "projects/folio.md",
+  "section": "Architecture"
 }
 ```
 
+```json
+{
+  "action": "toc",
+  "path": "projects/massive_plan.md"
+}
+```
+*(Returns a Table of Contents with headings and estimated token sizes so the AI can read just the section it needs.)*
+
+```json
+{
+  "action": "list",
+  "folder": "journal",
+  "sort": "updated",
+  "page": 2
+}
+```
+*(Returns a dense, token-efficient Markdown tree view of the workspace or a specific folder).*
+
 ### `folio_search` — Find Notes
-Search by content, tags, folder, or recency. Results are ranked by relevance.
+Search by content, tags, folder, or recency. Results are ranked by a blended AND+OR algorithm.
 
 **Examples (JSON syntax):**
 ```json
 {
   "query": "Postgres architecture",
-  "folder": "tech"
+  "folder": "tech",
+  "page": 1
 }
 ```
 

@@ -122,7 +122,7 @@ def folio(
         description="Page number for pagination. Default is 1. Only used with action='list'."
     )] = 1,
     sort: Annotated[Optional[str], Field(
-        description="Sort order: 'updated' (default), 'name', 'size', or 'created'. Only used with action='list'."
+        description="Sort order: 'updated' (default), 'name', or 'size'. Only used with action='list'."
     )] = None,
 ) -> Dict[str, Any]:
     """Markdown notes in folders with tags and versioning.
@@ -305,8 +305,6 @@ def folio(
                     notes.sort(key=lambda x: Path(x.path).name.lower())
                 elif sort_mode == "size":
                     notes.sort(key=lambda x: x.size_tokens, reverse=True)
-                elif sort_mode == "created":
-                    notes.sort(key=lambda x: x.updated, reverse=True) # Assuming updated fallback if created is not in summary
                 else: # "updated" default
                     notes.sort(key=lambda x: x.updated, reverse=True)
 
@@ -401,7 +399,7 @@ def folio_search(
     updated_since: Annotated[Optional[str], Field(
         description="Time filter: ISO date or relative like '7d', '24h', 'today'"
     )] = None,
-    limit: Annotated[Optional[int], Field(
+    limit: Annotated[int, Field(
         description="Max results to return per page (default: 10)"
     )] = 10,
     page: Annotated[int, Field(
