@@ -142,18 +142,39 @@ def replace_section(content: str, heading: str, new_body: str) -> str:
 
 
 def list_headings(content: str) -> list[dict[str, str | int]]:
-    """List all headings in the content.
+    """List all headings in the content and estimate their token length.
 
-    Returns list of {'level': int, 'text': str} dicts.
+    Returns list of {'level': int, 'text': str, 'length': int} dicts.
     """
     headings = []
-    for line in content.split("\n"):
+    lines = content.split("\n")
+
+    for i, line in enumerate(lines):
         match = re.match(r"^(#{1,6})\s+(.+)$", line.strip())
-        if match:
-            headings.append({
-                "level": len(match.group(1)),
-                "text": match.group(2).strip(),
-            })
+        if not match:
+            continue
+
+        level = len(match.group(1))
+        text = match.group(2).strip()
+
+        # Calculate length by finding next heading of same or higher level
+        end_idx = len(lines)
+        for j in range(i + 1, len(lines)):
+            next_match = re.match(r"^(#{1,6})\s+(.+)$", lines[j].strip())
+            if next_match:
+                next_level = len(next_match.group(1))
+                if next_level <= level:
+                    end_idx = j
+                    break
+
+        section_text = "\n".join(lines[i:end_idx])
+
+        headings.append({
+            "level": level,
+            "text": text,
+            "length": len(section_text)
+        })
+
     return headings
 
 

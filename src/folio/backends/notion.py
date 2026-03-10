@@ -623,6 +623,7 @@ class NotionBackend(FolioBackend):
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[SearchResult]:
         and_filters = []
         if query:
@@ -675,9 +676,9 @@ class NotionBackend(FolioBackend):
                 snippet=self._get_title_from_page(page),
                 score=1.0,
             ))
-            if len(results) >= limit:
+            if len(results) >= limit + offset:
                 break
-        return results
+        return results[offset:offset+limit]
 
     def undo(self, path: str) -> Note:
         raise RuntimeError(

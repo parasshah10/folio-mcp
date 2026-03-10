@@ -337,6 +337,7 @@ class LocalBackend(FolioBackend):
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[SearchResult]:
         query_lower = query.lower()
         query_terms = query_lower.split()
@@ -405,7 +406,7 @@ class LocalBackend(FolioBackend):
         else:
             results.sort(key=lambda r: r.score, reverse=True)
 
-        return results[:limit]
+        return results[offset:offset+limit]
 
     # ------------------------------------------------------------------
     # Backend methods: Undo

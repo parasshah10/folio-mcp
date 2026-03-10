@@ -89,7 +89,7 @@ def _summary_dict(s: NoteSummary) -> Dict[str, Any]:
 @mcp.tool
 def folio(
     action: Annotated[str, Field(
-        description="Action: create, read, update, delete, move, list, undo"
+        description="Action: create, read, update, delete, move, list, toc, undo"
     )],
     path: Annotated[Optional[str], Field(
         description="Note path, e.g. 'projects/companion.md'. Required except for list."
@@ -118,9 +118,12 @@ def folio(
     limit: Annotated[int, Field(
         description="Max items to list (default 100). Only used with action='list'."
     )] = 100,
-    offset: Annotated[int, Field(
-        description="Pagination offset. Only used with action='list'."
-    )] = 0,
+    page: Annotated[int, Field(
+        description="Page number for pagination. Default is 1. Only used with action='list'."
+    )] = 1,
+    sort: Annotated[Optional[str], Field(
+        description="Sort order: 'updated' (default), 'name', 'size', or 'created'. Only used with action='list'."
+    )] = None,
 ) -> Dict[str, Any]:
     """Markdown notes in folders with tags and versioning.
     Use prepend for running logs, section to refresh one heading body, replace to rewrite.
@@ -129,13 +132,14 @@ def folio(
         Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
                  content='# Sunday\\n## Morning\\nCycled in -6°C...\\n## Evening\\n...'
         Read section:  action='read', path='plans/cabin-weekend.md', section='Weekend Cabin Trip'
+        Table of Contents: action='toc', path='huge-note.md' (Returns headings and their sizes)
         Append:  action='update', path='watching/watchlist.md', mode='append',
                  content='\\n- The Terror S1 — slow-burn arctic horror'
         Section: action='update', path='projects/companion.md', mode='section',
                  target='Status', content='Folio MCP complete. Testing phase.'
         Retag:   action='update', path='shows/dark.md', tags=['favorite', 'pinned']
         Move:    action='move', path='notes/pizza.md', destination='food/pizza.md'
-        List:    action='list', folder='journal'
+        List:    action='list', folder='journal', page=2
     """
     try:
         # Normalize tags
@@ -245,6 +249,7 @@ def folio(
 
             # ------ LIST ------
             case "list":
+                offset = (max(1, page) - 1) * limit
                 all_notes = backend.list()
 
                 # Check if the workspace uses folders at all
@@ -270,10 +275,13 @@ def folio(
                         grouped.items(),
                         key=lambda x: max((n.updated for n in x[1])),
                         reverse=True
-                    )[:100]
+                    )
 
-                    lines = [f"Workspace Map (Showing {len(sorted_folders)} of {len(grouped)} folders):", ""]
-                    for f_name, f_notes in sorted_folders:
+                    total_folders = len(sorted_folders)
+                    folders_page = sorted_folders[offset:offset+limit]
+
+                    lines = [f"Workspace Map (Showing folders {offset + 1}-{offset + len(folders_page)} of {total_folders}):", ""]
+                    for f_name, f_notes in folders_page:
                         # Sort by updated desc
                         f_notes.sort(key=lambda x: x.updated, reverse=True)
                         f_disp = f"{f_name}/" if f_name else "/"
@@ -283,18 +291,31 @@ def folio(
                             latest_str += "..."
                         lines.append(f"{f_disp} ({len(f_notes)} notes) - Latest: {latest_str}")
 
+                    if total_folders > offset + limit:
+                        lines.append("")
+                        lines.append(f"... {total_folders - (offset + limit)} more folders. Use `page={page + 1}` to view more folders.")
+
                     lines.append("")
-                    lines.append("Tip: Use `action='list', folder='<name>'` to zoom into a folder. Use `folio_search` to find older notes.")
+                    lines.append("Tip: Use `action='list', folder='<name>'` to zoom into a folder.")
                     return {"status": "ok", "format": "text", "text": "\n".join(lines)}
 
                 # Otherwise, show Zoomed View for the folder (or flat workspace)
-                notes.sort(key=lambda x: x.updated, reverse=True)
+                sort_mode = (sort or "updated").lower()
+                if sort_mode == "name":
+                    notes.sort(key=lambda x: Path(x.path).name.lower())
+                elif sort_mode == "size":
+                    notes.sort(key=lambda x: x.size_tokens, reverse=True)
+                elif sort_mode == "created":
+                    notes.sort(key=lambda x: x.updated, reverse=True) # Assuming updated fallback if created is not in summary
+                else: # "updated" default
+                    notes.sort(key=lambda x: x.updated, reverse=True)
+
                 total_notes = len(notes)
                 notes_page = notes[offset:offset+limit]
 
                 f_disp = f"{folder.strip('/')}/" if folder else "/"
-                lines = [f"Folder: {f_disp}"]
-                lines.append(f"Showing {len(notes_page)} notes (offset {offset}) of {total_notes} total. Use `folio_search` to find older notes.")
+                lines = [f"Folder: {f_disp} (Sorted by {sort_mode})"]
+                lines.append(f"Showing {len(notes_page)} notes (Page {page}) of {total_notes} total.")
                 lines.append("")
 
                 for n in notes_page:
@@ -307,7 +328,31 @@ def folio(
 
                 if total_notes > offset + limit:
                     lines.append("")
-                    lines.append(f"... {total_notes - (offset + limit)} more notes. Use `offset={offset + limit}` to view older notes.")
+                    lines.append(f"... {total_notes - (offset + limit)} more notes. Use `page={page + 1}` to view older notes.")
+
+                return {"status": "ok", "format": "text", "text": "\n".join(lines)}
+
+            # ------ TOC ------
+            case "toc":
+                if not path:
+                    return {"error": "path is required for toc"}
+                try:
+                    note = backend.read(path)
+                except FileNotFoundError as e:
+                    return {"error": str(e)}
+
+                from folio.sections import list_headings
+                headings = list_headings(note.content)
+                if not headings:
+                    return {"status": "ok", "format": "text", "text": f"No headings found in {path} ({note.size_tokens} tokens total)."}
+
+                lines = [f"Table of Contents for {path} ({note.size_tokens} tokens total):", ""]
+                for h in headings:
+                    indent = "  " * (h["level"] - 1)
+                    # Approximate token size of the section
+                    size = h.get("length", 0) // 4
+                    toks = f"{size/1000:.1f}k" if size > 1000 else str(size)
+                    lines.append(f"{indent}{'#' * h['level']} {h['text']} ({toks} tokens)")
 
                 return {"status": "ok", "format": "text", "text": "\n".join(lines)}
 
@@ -357,8 +402,11 @@ def folio_search(
         description="Time filter: ISO date or relative like '7d', '24h', 'today'"
     )] = None,
     limit: Annotated[Optional[int], Field(
-        description="Max results to return (default: 10)"
-    )] = None,
+        description="Max results to return per page (default: 10)"
+    )] = 10,
+    page: Annotated[int, Field(
+        description="Page number for pagination. Default is 1."
+    )] = 1,
 ) -> Dict[str, Any]:
     """Search across all notes by content, filename, tags, and time.
 
@@ -368,29 +416,44 @@ def folio_search(
         Scoped:    query='memory architecture', folder='projects'
         Pinned:    query='', tags=['pinned']
         Recent:    query='illustration', sort='recent', updated_since='7d'
+        Paginate:  query='react', page=2
     """
     try:
+        offset = (max(1, page) - 1) * limit
         results = backend.search(
             query=query,
             tags=tags,
             folder=folder,
             sort=sort or "relevance",
             updated_since=updated_since,
-            limit=limit or 10,
+            limit=limit,
+            offset=offset,
         )
-        return {
-            "status": "ok",
-            "query": query,
-            "results": [
-                {
-                    **_summary_dict(r.note),
-                    "snippet": r.snippet,
-                    "score": round(r.score, 3),
-                }
-                for r in results
-            ],
-            "count": len(results),
-        }
+
+        if not results:
+            return {"status": "ok", "format": "text", "text": f"No results found for '{query}'"}
+
+        lines = [f"Search Results for \"{query}\" (Showing page {page}):", ""]
+
+        for i, r in enumerate(results):
+            filename = Path(r.note.path).name
+            tag_str = f" [tags: {', '.join(r.note.tags)}]" if r.note.tags else ""
+            toks = f"{r.note.size_tokens/1000:.1f}k" if r.note.size_tokens > 1000 else str(r.note.size_tokens)
+            updated = r.note.updated.strftime("%Y-%m-%d")
+            score = round(r.score, 2)
+
+            lines.append(f"{offset + i + 1}. {filename} ({r.note.path})")
+            lines.append(f"   [{toks} tokens]{tag_str} | Updated: {updated} | Score: {score}")
+
+            snippet = r.snippet.replace("\n", " ").strip()
+            if snippet:
+                lines.append(f"   \"{snippet}\"")
+            lines.append("")
+
+        if len(results) == limit:
+            lines.append(f"Use `page={page + 1}` to view more results.")
+
+        return {"status": "ok", "format": "text", "text": "\n".join(lines).strip()}
 
     except Exception as e:
         return {"error": f"Search failed: {type(e).__name__}: {e}"}
