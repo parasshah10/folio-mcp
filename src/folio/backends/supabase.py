@@ -217,6 +217,7 @@ class SupabaseBackend(FolioBackend):
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[SearchResult]:
         
         cutoff = _parse_since(updated_since).isoformat() if updated_since else None
@@ -227,7 +228,8 @@ class SupabaseBackend(FolioBackend):
             'filter_tags': tags,
             'filter_since': cutoff,
             'sort_by': sort,
-            'max_results': limit
+            'max_results': limit,
+            'page_offset': offset
         }).execute()
 
         results = []

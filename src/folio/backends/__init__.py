@@ -47,6 +47,7 @@ class FolioBackend(ABC):
         sort: str = "relevance",
         updated_since: str | None = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> list["SearchResult"]: ...
 
     @abstractmethod
