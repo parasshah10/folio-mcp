@@ -215,7 +215,8 @@ class NotionBackend(FolioBackend):
                 path=f"pages/{page_id}/markdown",
                 method="GET",
             )
-            return response.get("page_markdown", {}).get("markdown", "")
+            logger.debug(f"Markdown response keys: {list(response.keys())}")
+            return response.get("markdown", "")
         except APIResponseError as e:
             logger.warning(f"Failed to read native markdown for {page_id}: {e}")
             return ""
