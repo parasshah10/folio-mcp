@@ -70,6 +70,7 @@ class SupabaseBackend(FolioBackend):
     def _row_to_note(self, row: dict) -> Note:
         return Note(
             path=row["path"],
+            title=row.get("title", ""),
             content=row.get("content", ""),
             tags=row.get("tags", []),
             created=datetime.fromisoformat(row["created_at"]),
