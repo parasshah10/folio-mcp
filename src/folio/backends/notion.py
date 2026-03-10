@@ -249,18 +249,19 @@ class NotionBackend(FolioBackend):
         blocks = self._fetch_all_blocks(page_id)
         return _blocks_to_markdown(blocks)
 
-    def _write_page_content(self, page_id: str, markdown: str) -> None:
+    def _write_page_content(self, page_id: str, markdown: str, old_content: str | None = None) -> None:
         """Replace all page content surgically by matching the old content string."""
         if not markdown:
             # Full clear requested
             self._clear_all_blocks(page_id)
             return
 
-        # 1. Read current content (1-2 calls) to get exact match string
-        try:
-            old_content = self._read_page_content(page_id)
-        except Exception:
-            old_content = ""
+        # 1. Read current content (1-2 calls) to get exact match string if not provided
+        if old_content is None:
+            try:
+                old_content = self._read_page_content(page_id)
+            except Exception:
+                old_content = ""
 
         # 2. If already empty, just insert
         if not old_content.strip():
@@ -284,6 +285,26 @@ class NotionBackend(FolioBackend):
             logger.warning(f"Surgical overwrite failed, falling back to block-clearing: {e}")
             self._clear_all_blocks(page_id)
             self._append_page_content(page_id, markdown)
+
+    def _prepend_page_content(self, page_id: str, markdown: str) -> None:
+        """Prepend markdown to the beginning of the page."""
+        if not markdown:
+            return
+
+        try:
+            old_content = self._read_page_content(page_id)
+        except Exception:
+            old_content = ""
+
+        content = markdown.replace("\\n", "\n")
+        if old_content:
+            if not content.endswith("\n\n"):
+                content += "\n\n"
+            new_content = content + old_content
+        else:
+            new_content = content
+
+        self._write_page_content(page_id, new_content, old_content)
 
     def _clear_all_blocks(self, page_id: str) -> None:
         """Delete all blocks on the page using block-by-block deletion."""
@@ -392,7 +413,10 @@ class NotionBackend(FolioBackend):
         folder = self._get_folder(page)
 
         # Strict Auto-Sync: Derive the expected path from Title and Folder
-        slug = _slugify_title(title) if title and title != "Untitled" else f"untitled-{page['id'][:8]}.md"
+        slug = _slugify_title(title) if title and title != "Untitled" else None
+        if not slug:
+            slug = f"untitled-{page['id'][:8]}.md"
+
         expected_path = f"{folder}/{slug}" if folder else slug
 
         # If the path is missing or doesn't match the title/folder, update it.
@@ -496,6 +520,8 @@ class NotionBackend(FolioBackend):
                     self._write_page_content(page_id, content)
                 case "append":
                     self._append_page_content(page_id, content)
+                case "prepend":
+                    self._prepend_page_content(page_id, content)
                 case "section":
                     if not target:
                         raise ValueError("Section update requires a 'target' heading")
