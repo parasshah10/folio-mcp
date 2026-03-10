@@ -107,7 +107,7 @@ class SupabaseBackend(FolioBackend):
             raise RuntimeError(f"Database error: {e}")
 
     def read(self, path: str, section: str | None = None) -> Note:
-        res = self.client.table("notes").select("*").eq("path", path).execute()
+        res = self.client.table("notes").select("*").eq("path", path).neq("sync_status", "pending_delete").execute()
         if not res.data:
             raise FileNotFoundError(f"Note not found: {path}")
             
