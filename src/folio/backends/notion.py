@@ -208,35 +208,17 @@ class NotionBackend(FolioBackend):
     # Page content I/O (Native Markdown)
     # ------------------------------------------------------------------
 
-    def _fetch_all_blocks(self, page_id: str) -> List[dict]:
-        """Fetch all block objects for a page, skipping archived ones."""
-        blocks: List[dict] = []
-        cursor = None
-
-        while True:
-            response = self.client.blocks.children.list(
-                block_id=page_id,
-                start_cursor=cursor,
-                page_size=100,
-            )
-            for b in response["results"]:
-                if not b.get("archived") and not b.get("in_trash"):
-                    blocks.append(b)
-                    # Recursively fetch rows for tables
-                    if b.get("type") == "table" and b.get("has_children"):
-                        rows = self._fetch_all_blocks(b["id"])
-                        blocks.extend(rows)
-
-            if not response.get("has_more"):
-                break
-            cursor = response.get("next_cursor")
-
-        return blocks
-
     def _read_page_content(self, page_id: str) -> str:
-        """Read all blocks from a page, convert to markdown."""
-        blocks = self._fetch_all_blocks(page_id)
-        return _blocks_to_markdown(blocks)
+        """Read all content natively as enhanced markdown."""
+        try:
+            response = self.client.request(
+                path=f"pages/{page_id}/markdown",
+                method="GET",
+            )
+            return response.get("page_markdown", {}).get("markdown", "")
+        except APIResponseError as e:
+            logger.warning(f"Failed to read native markdown for {page_id}: {e}")
+            return ""
 
     def _write_page_content(self, page_id: str, markdown: str, old_content: str | None = None) -> None:
         """Replace all page content surgically by matching the old content string."""
@@ -297,12 +279,23 @@ class NotionBackend(FolioBackend):
 
     def _clear_all_blocks(self, page_id: str) -> None:
         """Delete all blocks on the page using block-by-block deletion."""
-        blocks = self._fetch_all_blocks(page_id)
-        for b in blocks:
-            try:
-                self.client.request(path=f"blocks/{b['id']}", method="DELETE")
-            except Exception:
-                continue
+        cursor = None
+        while True:
+            response = self.client.blocks.children.list(
+                block_id=page_id,
+                start_cursor=cursor,
+                page_size=100,
+            )
+            for b in response["results"]:
+                if not b.get("archived") and not b.get("in_trash"):
+                    try:
+                        self.client.request(path=f"blocks/{b['id']}", method="DELETE")
+                    except Exception:
+                        continue
+
+            if not response.get("has_more"):
+                break
+            cursor = response.get("next_cursor")
 
     def _append_page_content(self, page_id: str, markdown: str) -> None:
         """Append markdown to end of page in a single call."""
@@ -755,106 +748,3 @@ def _parse_since(value: str) -> datetime:
         raise ValueError(f"Invalid time filter: '{value}'. Use relative ('7d', '24h', 'today') or ISO date.")
 
 
-def _blocks_to_markdown(blocks: List[dict]) -> str:
-    """Convert Notion blocks back to markdown."""
-    lines: List[str] = []
-    prev_type = ""
-    list_index = 0
-    table_started = False
-
-    for block in blocks:
-        btype = block.get("type", "")
-        data = block.get(btype, {})
-        rt = data.get("rich_text", [])
-
-        if btype == "numbered_list_item":
-            list_index += 1
-        else:
-            list_index = 0
-
-        if prev_type in ("bulleted_list_item", "numbered_list_item"):
-            if btype not in ("bulleted_list_item", "numbered_list_item"):
-                lines.append("")
-
-        if prev_type == "table_row" and btype != "table_row":
-            lines.append("")
-
-        match btype:
-            case "table":
-                table_started = True
-                continue
-            case "table_row":
-                cells = data.get("cells", [])
-                row_str = "| " + " | ".join(_rt_to_md(c) for c in cells) + " |"
-                lines.append(row_str)
-                if table_started:
-                    sep = "| " + " | ".join(["---"] * len(cells)) + " |"
-                    lines.append(sep)
-                    table_started = False
-            case "heading_1":
-                lines.append(f"# {_rt_to_md(rt)}")
-                lines.append("")
-            case "heading_2":
-                lines.append(f"## {_rt_to_md(rt)}")
-                lines.append("")
-            case "heading_3":
-                lines.append(f"### {_rt_to_md(rt)}")
-                lines.append("")
-            case "paragraph":
-                text = _rt_to_md(rt)
-                lines.append(text)
-                lines.append("")
-            case "bulleted_list_item":
-                lines.append(f"- {_rt_to_md(rt)}")
-            case "numbered_list_item":
-                lines.append(f"{list_index}. {_rt_to_md(rt)}")
-            case "quote":
-                lines.append(f"> {_rt_to_md(rt)}")
-                lines.append("")
-            case "code":
-                lang = data.get("language", "")
-                if lang == "plain text":
-                    lang = ""
-                code = _rt_to_plain(rt)
-                lines.append(f"```{lang}")
-                lines.append(code)
-                lines.append("```")
-                lines.append("")
-            case "divider":
-                lines.append("---")
-                lines.append("")
-            case _:
-                if rt:
-                    lines.append(_rt_to_md(rt))
-                    lines.append("")
-        prev_type = btype
-
-    result = "\n".join(lines)
-    result = re.sub(r"\n{3,}", "\n\n", result)
-    return result.strip()
-
-
-def _rt_to_md(rich_text: List[dict]) -> str:
-    """Convert Notion rich_text array to markdown with formatting."""
-    parts: List[str] = []
-    for seg in rich_text:
-        text = seg.get("text", {}).get("content", "")
-        ann = seg.get("annotations", {})
-        link = seg.get("text", {}).get("link")
-        if link:
-            text = f"[{text}]({link.get('url', '')})"
-        elif ann.get("code"):
-            text = f"`{text}`"
-        elif ann.get("bold") and ann.get("italic"):
-            text = f"***{text}***"
-        elif ann.get("bold"):
-            text = f"**{text}**"
-        elif ann.get("italic"):
-            text = f"*{text}*"
-        parts.append(text)
-    return "".join(parts)
-
-
-def _rt_to_plain(rich_text: List[dict]) -> str:
-    """Extract plain text from rich_text (no formatting)."""
-    return "".join(seg.get("text", {}).get("content", "") for seg in rich_text)
