@@ -121,13 +121,80 @@ class SyncEngine:
                     self.client.table('notes').delete().eq('external_id', ext_id).execute()
                 else:
                     # Match by external_id
-                    existing = self.client.table('notes').select('id, path, sync_status').eq('external_id', ext_id).execute()
+                    existing = self.client.table('notes').select('id, path, title, sync_status').eq('external_id', ext_id).execute()
                     
                     derived_path = note.path
+
+                    # -------------------------------------------------------------
+                    # Intelligent Auto-Link Path Evaluation
+                    # -------------------------------------------------------------
+                    current_slug = derived_path.split("/")[-1]
+                    from folio.backends.notion import _slugify_title
+
+                    is_untitled = bool(current_slug.startswith("untitled-"))
+
+                    if existing.data:
+                        old_path = existing.data[0]['path']
+                        old_title = existing.data[0]['title']
+
+                        old_title_slug = _slugify_title(old_title) if old_title and old_title != "Untitled" else None
+
+                        # Did the user manually change the path in Notion without changing the title?
+                        manual_path_override = (derived_path != old_path) and (note.title == old_title)
+
+                        # Was the old path directly derived from the old title?
+                        was_auto_linked = bool(old_title_slug and old_path.split("/")[-1] == old_title_slug)
+
+                        should_auto_link = (was_auto_linked and not manual_path_override) or is_untitled
+                    else:
+                        # For brand new notes, if the path is a placeholder but the user has already
+                        # typed a real title, we must evaluate it as auto-linked immediately.
+                        should_auto_link = is_untitled
+
+                    if should_auto_link:
+                        # It is auto-linked! Generate new expected path based on new Notion Title and Folder
+                        new_slug = _slugify_title(note.title) if note.title and note.title != "Untitled" else None
+                        if not new_slug:
+                            new_slug = f"untitled-{ext_id[:8]}.md"
+                        derived_path = f"{note.folder}/{new_slug}" if note.folder else new_slug
+
+                        # If we generated a new path, we should ideally push it back to Notion here too.
+                        # We can do this silently in the background.
+                        if derived_path != note.path:
+                            def _push_path_fix(page_id, new_path):
+                                try:
+                                    self.adapter._backend.client.pages.update(
+                                        page_id=page_id,
+                                        properties={"folio_path": {"rich_text": [{"text": {"content": new_path}}]}}
+                                    )
+                                    self.adapter._backend._cache[new_path] = page_id
+                                except Exception:
+                                    pass
+                            import threading
+                            threading.Thread(target=_push_path_fix, args=(ext_id, derived_path), daemon=True).start()
+                    else:
+                        # It's an EXPLICIT path. Leave the custom filename alone!
+                        # But we DO want to sync folder moves if the Notion folder property changed.
+                        explicit_slug = current_slug
+                        derived_path = f"{note.folder}/{explicit_slug}" if note.folder else explicit_slug
+
+                        if derived_path != note.path:
+                            def _push_folder_fix(page_id, new_path):
+                                try:
+                                    self.adapter._backend.client.pages.update(
+                                        page_id=page_id,
+                                        properties={"folio_path": {"rich_text": [{"text": {"content": new_path}}]}}
+                                    )
+                                    self.adapter._backend._cache[new_path] = page_id
+                                except Exception:
+                                    pass
+                            import threading
+                            threading.Thread(target=_push_folder_fix, args=(ext_id, derived_path), daemon=True).start()
+
                     if not existing.data:
                         # Fallback: Match by path (to link existing unlinked rows)
                         logger.debug(f"SyncEngine: No external_id match for {derived_path}, checking by path.")
-                        existing = self.client.table('notes').select('id, path, sync_status').eq('path', derived_path).execute()
+                        existing = self.client.table('notes').select('id, path, title, sync_status').eq('path', derived_path).execute()
 
                     # Don't overwrite notes with pending local changes
                     if existing.data and existing.data[0].get('sync_status') == 'pending_push':

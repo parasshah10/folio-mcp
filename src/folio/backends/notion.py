@@ -408,59 +408,41 @@ class NotionBackend(FolioBackend):
 
     def _page_to_note(self, page: dict, content: str | None = None) -> Note:
         """Convert a Notion page + content into a Note."""
-        current_folio_path = self._get_path(page)
+        folio_path = self._get_path(page)
         title = self._get_title_from_page(page)
-        folder = self._get_folder(page)
 
-        # Extract existing slug if present
-        existing_slug = None
-        if current_folio_path:
-            existing_slug = current_folio_path.split("/")[-1]
+        # We no longer do the complex auto-syncing of paths here!
+        # The SyncEngine is now entirely responsible for evaluating
+        # auto-linked vs explicit paths using the Supabase history.
 
-        # Determine the correct slug:
-        # If no path exists, or if it's a temporary 'untitled-' placeholder, generate from title.
-        # Otherwise, respect the existing custom slug.
-        if not existing_slug or existing_slug.startswith("untitled-"):
-            slug = _slugify_title(title) if title and title != "Untitled" else None
-            if not slug:
-                slug = f"untitled-{page['id'][:8]}.md"
-        else:
-            slug = existing_slug
+        if not folio_path:
+            # The only thing we do here is catch completely brand new
+            # pages that have no path at all.
+            slug = f"untitled-{page['id'][:8]}.md"
+            folder = self._get_folder(page)
+            folio_path = f"{folder}/{slug}" if folder else slug
 
-        # Combine the Notion folder with the chosen slug
-        expected_path = f"{folder}/{slug}" if folder else slug
-
-        # If the path is missing or doesn't match the folder/slug, update it.
-        # This ensures folder moves sync, and untitled placeholders get resolved,
-        # but custom filenames are never aggressively overwritten.
-        if current_folio_path != expected_path:
             try:
                 self.client.pages.update(
                     page_id=page["id"],
                     properties={
-                        "folio_path": {"rich_text": [{"text": {"content": expected_path}}]}
+                        "folio_path": {"rich_text": [{"text": {"content": folio_path}}]}
                     }
                 )
-                # Update the cache to point to the new path
-                if current_folio_path and current_folio_path in self._cache:
-                    del self._cache[current_folio_path]
-                self._cache[expected_path] = page["id"]
-                current_folio_path = expected_path
+                self._cache[folio_path] = page["id"]
             except Exception as e:
-                logger.error(f"Failed to write derived path back to Notion: {e}")
-                # Fallback to whatever we had if update fails, or expected path if none
-                current_folio_path = current_folio_path or expected_path
+                logger.error(f"Failed to write initial path to Notion: {e}")
 
         created, updated = self._get_timestamps(page)
         content = self._read_page_content(page["id"])
 
         return Note(
-            path=current_folio_path,
+            path=folio_path,
+            title=title,
             content=content,
             tags=self._get_tags_from_page(page),
             created=created,
             updated=updated,
-            metadata={"title": title}
         )
 
     # ------------------------------------------------------------------
@@ -518,6 +500,7 @@ class NotionBackend(FolioBackend):
         mode: str = "replace",
         target: str | None = None,
         tags: List[str] | None = None,
+        title: str | None = None,
     ) -> Note:
         page_id = self._resolve_page_id(path)
 
@@ -542,10 +525,16 @@ class NotionBackend(FolioBackend):
                 case _:
                     raise ValueError(f"Invalid mode: {mode}")
 
+        updates = {}
         if tags is not None:
+            updates["tags"] = {"multi_select": [{"name": t} for t in tags]}
+        if title is not None:
+            updates["Name"] = {"title": [{"text": {"content": title}}]}
+
+        if updates:
             self.client.pages.update(
                 page_id=page_id,
-                properties={"tags": {"multi_select": [{"name": t} for t in tags]}},
+                properties=updates,
             )
 
         page = self.client.pages.retrieve(page_id)

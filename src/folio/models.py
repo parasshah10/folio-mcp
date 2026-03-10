@@ -16,6 +16,9 @@ class Note(BaseModel):
     path: str = Field(
         ..., description="Unique path identifier, e.g. 'projects/companion.md'"
     )
+    title: str = Field(
+        default="", description="Display name of the note"
+    )
     content: str = Field(default="", description="Markdown body")
     tags: list[str] = Field(default_factory=list, description="Organizational tags")
     created: datetime = Field(
@@ -33,19 +36,17 @@ class Note(BaseModel):
     def __init__(self, **data):
         if "content" in data and isinstance(data["content"], str):
             data["content"] = data["content"].replace("\\n", "\n")
-        super().__init__(**data)
 
-    @property
-    def title(self) -> str:
-        """Derive title from metadata, first H1 heading, or filename."""
-        if "title" in self.metadata:
-            return self.metadata["title"]
-        for line in self.content.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("# ") and not stripped.startswith("## "):
-                return stripped[2:].strip()
-        stem = Path(self.path).stem
-        return stem.replace("-", " ").replace("_", " ").title()
+        # Fallback for title if empty
+        if not data.get("title"):
+            path_str = data.get("path", "")
+            if path_str:
+                stem = Path(path_str).stem
+                data["title"] = stem.replace("-", " ").replace("_", " ").title()
+            else:
+                data["title"] = "Untitled"
+
+        super().__init__(**data)
 
     @property
     def folder(self) -> str:
