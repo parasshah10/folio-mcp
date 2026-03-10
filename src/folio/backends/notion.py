@@ -205,21 +205,41 @@ class NotionBackend(FolioBackend):
         return props
 
     # ------------------------------------------------------------------
-    # Page content I/O (Native Markdown)
+    # Page content I/O (Standard Markdown via Block Parser)
     # ------------------------------------------------------------------
 
-    def _read_page_content(self, page_id: str) -> str:
-        """Read all content natively as enhanced markdown."""
-        try:
-            response = self.client.request(
-                path=f"pages/{page_id}/markdown",
-                method="GET",
+    def _fetch_all_blocks(self, page_id: str) -> List[dict]:
+        """Fetch all block objects for a page, skipping archived ones."""
+        blocks: List[dict] = []
+        cursor = None
+
+        while True:
+            response = self.client.blocks.children.list(
+                block_id=page_id,
+                start_cursor=cursor,
+                page_size=100,
             )
-            logger.debug(f"Markdown response keys: {list(response.keys())}")
-            return response.get("markdown", "")
-        except APIResponseError as e:
-            logger.warning(f"Failed to read native markdown for {page_id}: {e}")
-            return ""
+            for b in response["results"]:
+                if not b.get("archived") and not b.get("in_trash"):
+                    # For blocks that can have children, fetch them recursively
+                    # and attach them to the block dictionary.
+                    if b.get("has_children") and b.get("type") in (
+                        "table", "bulleted_list_item", "numbered_list_item", "to_do", "quote"
+                    ):
+                        b["fetched_children"] = self._fetch_all_blocks(b["id"])
+
+                    blocks.append(b)
+
+            if not response.get("has_more"):
+                break
+            cursor = response.get("next_cursor")
+
+        return blocks
+
+    def _read_page_content(self, page_id: str) -> str:
+        """Read all blocks from a page, convert to markdown."""
+        blocks = self._fetch_all_blocks(page_id)
+        return _blocks_to_markdown(blocks)
 
     def _write_page_content(self, page_id: str, markdown: str, old_content: str | None = None) -> None:
         """Replace all page content surgically by matching the old content string."""
@@ -280,23 +300,12 @@ class NotionBackend(FolioBackend):
 
     def _clear_all_blocks(self, page_id: str) -> None:
         """Delete all blocks on the page using block-by-block deletion."""
-        cursor = None
-        while True:
-            response = self.client.blocks.children.list(
-                block_id=page_id,
-                start_cursor=cursor,
-                page_size=100,
-            )
-            for b in response["results"]:
-                if not b.get("archived") and not b.get("in_trash"):
-                    try:
-                        self.client.request(path=f"blocks/{b['id']}", method="DELETE")
-                    except Exception:
-                        continue
-
-            if not response.get("has_more"):
-                break
-            cursor = response.get("next_cursor")
+        blocks = self._fetch_all_blocks(page_id)
+        for b in blocks:
+            try:
+                self.client.request(path=f"blocks/{b['id']}", method="DELETE")
+            except Exception:
+                continue
 
     def _append_page_content(self, page_id: str, markdown: str) -> None:
         """Append markdown to end of page in a single call."""
@@ -715,7 +724,7 @@ class NotionBackend(FolioBackend):
     def import_all(self, notes: List[Note]) -> None:
         for note in notes:
             if note.path in self._cache:
-                self.update(path=note.path, content=note.content, mode="replace", tags=note.tags)
+                self.update(path=note.path, content=note.content, mode="replace", tags=note.tags, title=note.title)
             else:
                 self.create(note)
 
@@ -749,3 +758,154 @@ def _parse_since(value: str) -> datetime:
         raise ValueError(f"Invalid time filter: '{value}'. Use relative ('7d', '24h', 'today') or ISO date.")
 
 
+def _blocks_to_markdown(blocks: List[dict], depth: int = 0) -> str:
+    """Convert Notion blocks back to standard markdown."""
+    lines: List[str] = []
+    prev_type = ""
+    list_index = 0
+    table_started = False
+
+    indent = "  " * depth
+
+    for block in blocks:
+        btype = block.get("type", "")
+        data = block.get(btype, {})
+        rt = data.get("rich_text", [])
+
+        # Reset list index if we switch list types
+        if btype == "numbered_list_item":
+            list_index += 1
+        else:
+            list_index = 0
+
+        # Add blank lines between lists and paragraphs if needed
+        if prev_type in ("bulleted_list_item", "numbered_list_item", "to_do"):
+            if btype not in ("bulleted_list_item", "numbered_list_item", "to_do"):
+                lines.append("")
+
+        if prev_type == "table_row" and btype != "table_row":
+            lines.append("")
+
+        match btype:
+            case "table":
+                table_started = True
+                # A table block just holds rows, process its children immediately
+                children = block.get("fetched_children", [])
+                if children:
+                    child_md = _blocks_to_markdown(children, depth)
+                    lines.append(child_md)
+                continue
+            case "table_row":
+                cells = data.get("cells", [])
+                row_str = indent + "| " + " | ".join(_rt_to_md(c) for c in cells) + " |"
+                lines.append(row_str)
+                if table_started:
+                    sep = indent + "| " + " | ".join(["---"] * len(cells)) + " |"
+                    lines.append(sep)
+                    table_started = False
+            case "heading_1":
+                lines.append(f"{indent}# {_rt_to_md(rt)}")
+                lines.append("")
+            case "heading_2":
+                lines.append(f"{indent}## {_rt_to_md(rt)}")
+                lines.append("")
+            case "heading_3":
+                lines.append(f"{indent}### {_rt_to_md(rt)}")
+                lines.append("")
+            case "paragraph":
+                text = _rt_to_md(rt)
+                lines.append(f"{indent}{text}")
+                lines.append("")
+            case "bulleted_list_item":
+                lines.append(f"{indent}- {_rt_to_md(rt)}")
+            case "numbered_list_item":
+                lines.append(f"{indent}{list_index}. {_rt_to_md(rt)}")
+            case "to_do":
+                checked = data.get("checked", False)
+                box = "[x]" if checked else "[ ]"
+                lines.append(f"{indent}- {box} {_rt_to_md(rt)}")
+            case "quote":
+                # Handle multi-line quotes properly
+                quote_text = _rt_to_md(rt)
+                for q_line in quote_text.split('\n'):
+                    lines.append(f"{indent}> {q_line}")
+            case "code":
+                lang = data.get("language", "")
+                if lang == "plain text":
+                    lang = ""
+                code = _rt_to_plain(rt)
+                lines.append(f"{indent}```{lang}")
+                for c_line in code.split('\n'):
+                    lines.append(f"{indent}{c_line}")
+                lines.append(f"{indent}```")
+                lines.append("")
+            case "image":
+                url = data.get("external", {}).get("url") or data.get("file", {}).get("url", "")
+                caption = _rt_to_md(data.get("caption", []))
+                lines.append(f"{indent}![{caption}]({url})")
+                lines.append("")
+            case "divider":
+                lines.append(f"{indent}---")
+                lines.append("")
+            case _:
+                if rt:
+                    lines.append(f"{indent}{_rt_to_md(rt)}")
+                    lines.append("")
+
+        # Process nested children (lists, quotes) by recursing with increased depth
+        children = block.get("fetched_children", [])
+        if children and btype != "table":
+            # For quotes, children technically belong inside the quote, but
+            # standard markdown doesn't support deep arbitrary nesting inside blockquotes cleanly
+            # without prefixing every line with `>`. So we just indent them.
+            child_depth = depth + 1 if btype not in ("quote") else depth
+            child_md = _blocks_to_markdown(children, child_depth)
+
+            if btype == "quote":
+                # Prefix nested children of quotes with `>`
+                for c_line in child_md.split("\n"):
+                    if c_line.strip():
+                        lines.append(f"{indent}> {c_line}")
+                    else:
+                        lines.append(f"{indent}>")
+            else:
+                lines.append(child_md)
+
+        prev_type = btype
+
+    result = "\n".join(lines)
+    if depth == 0:
+        result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip() if depth == 0 else result
+
+
+def _rt_to_md(rich_text: List[dict]) -> str:
+    """Convert Notion rich_text array to markdown with formatting."""
+    parts: List[str] = []
+    for seg in rich_text:
+        text = seg.get("text", {}).get("content", "")
+        ann = seg.get("annotations", {})
+        link = seg.get("text", {}).get("link")
+
+        # Apply formatting inside-out
+        if ann.get("code"):
+            text = f"`{text}`"
+        if ann.get("bold") and ann.get("italic"):
+            text = f"***{text}***"
+        elif ann.get("bold"):
+            text = f"**{text}**"
+        elif ann.get("italic"):
+            text = f"*{text}*"
+        if ann.get("strikethrough"):
+            text = f"~~{text}~~"
+
+        if link:
+            text = f"[{text}]({link.get('url', '')})"
+
+        parts.append(text)
+    return "".join(parts)
+
+
+def _rt_to_plain(rich_text: List[dict]) -> str:
+    """Extract plain text from rich_text (no formatting)."""
+    return "".join(seg.get("text", {}).get("content", "") for seg in rich_text)
