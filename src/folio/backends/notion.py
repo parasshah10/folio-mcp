@@ -20,21 +20,10 @@ from notion_client.errors import APIResponseError
 
 from folio.backends import FolioBackend
 from folio.config import NotionConfig
-from folio.models import Note, NoteSummary, SearchResult
+from folio.models import Note, NoteSummary, SearchResult, slugify_title as _slugify_title
 from folio.sections import extract_section, strip_redundant_heading
 
 logger = logging.getLogger("folio.notion")
-
-
-def _slugify_title(title: str) -> str:
-    """Convert a page title to a Folio-style path slug."""
-    slug = title.lower().strip()
-    slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
-    slug = re.sub(r"[\s_]+", "-", slug)  # Spaces/underscores → hyphens
-    slug = re.sub(r"-+", "-", slug).strip("-")  # Collapse hyphens
-    slug = slug[:500]  # Truncate to avoid path length issues
-    slug = slug.strip("-")
-    return f"{slug}.md" if slug else None
 
 
 class NotionBackend(FolioBackend):
@@ -548,14 +537,27 @@ class NotionBackend(FolioBackend):
             raise RuntimeError(f"Failed to delete: {str(e)}")
         self._cache.pop(path, None)
 
-    def move(self, source: str, target: str) -> Note:
+    def move(self, source: str, target: str, title: str | None = None) -> Note:
+        from folio.models import evaluate_move_title
+
         page_id = self._resolve_page_id(source)
         if target in self._cache:
             raise FileExistsError(f"Target already exists: {target}")
 
+        try:
+            page = self.client.pages.retrieve(page_id)
+        except APIResponseError:
+            raise FileNotFoundError(f"Note not found: {source}")
+
         new_folder = str(Path(target).parent) if "/" in target else ""
-        new_stem = Path(target).stem
-        new_title = new_stem.replace("-", " ").replace("_", " ").title()
+
+        # If title wasn't explicitly provided (e.g. not passed down from Supabase),
+        # evaluate it ourselves using the current Notion title.
+        if title is None:
+            old_title = self._get_title_from_page(page)
+            new_title = evaluate_move_title(source, old_title, target)
+        else:
+            new_title = title
 
         props: dict[str, Any] = {
             "Name": {"title": [{"text": {"content": new_title}}]},

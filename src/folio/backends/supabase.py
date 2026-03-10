@@ -174,11 +174,15 @@ class SupabaseBackend(FolioBackend):
         self._push_to_notion("delete", path=path)
 
     def move(self, source: str, target: str) -> Note:
+        from folio.models import evaluate_move_title
+
         note = self.read(source)
         new_folder = "/".join(target.split("/")[:-1]) if "/" in target else ""
+        new_title = evaluate_move_title(source, note.title, target)
         
         data = {
             "path": target,
+            "title": new_title,
             "folder": new_folder,
             "sync_status": "pending_push" if self.sync_engine else "synced",
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -186,7 +190,7 @@ class SupabaseBackend(FolioBackend):
         try:
             res = self.client.table("notes").update(data).eq("path", source).execute()
             result = self._row_to_note(res.data[0])
-            self._push_to_notion("move", source=source, target_path=target, path=target)
+            self._push_to_notion("move", source=source, target_path=target, path=target, title=new_title)
             return result
         except postgrest.exceptions.APIError as e:
             if "duplicate key value" in str(e):

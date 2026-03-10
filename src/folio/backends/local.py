@@ -263,13 +263,18 @@ class LocalBackend(FolioBackend):
         self._index.pop(path, None)
         self._git_commit(f"folio: delete {path}", [path])
 
-    def move(self, source: str, target: str) -> Note:
+    def move(self, source: str, target: str, title: str | None = None) -> Note:
+        from folio.models import evaluate_move_title
+
         src_path = self._resolve(source)
         if not src_path.exists():
             raise FileNotFoundError(f"Note not found: {source}")
         tgt_path = self._resolve(target)
         if tgt_path.exists():
             raise FileExistsError(f"Target already exists: {target}")
+
+        old_note = self._read_file(source)
+        new_title = title if title is not None else evaluate_move_title(source, old_note.title, target)
 
         tgt_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -290,10 +295,11 @@ class LocalBackend(FolioBackend):
             parent.rmdir()
             parent = parent.parent
 
-        # Read from new location, update index
+        # Read from new location, update index and title
         note = self._read_file(target)
         note = note.model_copy(update={
             "path": target,
+            "title": new_title,
             "updated": datetime.now(timezone.utc),
         })
         self._write_file(note)
