@@ -94,8 +94,11 @@ def folio(
     path: Annotated[Optional[str], Field(
         description="Note path, e.g. 'projects/companion.md'. Required except for list."
     )] = None,
+    title: Annotated[Optional[str], Field(
+        description="Display title of the note. Required for create."
+    )] = None,
     content: Annotated[Optional[str], Field(
-        description="Markdown content. For section mode, provide only the section body — the heading is preserved automatically."
+        description="Markdown content. Note: Do NOT start content with an # H1 heading. Use the 'title' argument instead to name the document."
     )] = None,
     mode: Annotated[Optional[str], Field(
         description="Update mode: 'replace' (default), 'append', 'prepend', or 'section'"
@@ -129,8 +132,8 @@ def folio(
     Use prepend for running logs, section to refresh one heading body, replace to rewrite.
 
     Examples:
-        Create:  action='create', path='journal/2026-02-23.md', tags=['journal'],
-                 content='# Sunday\\n## Morning\\nCycled in -6°C...\\n## Evening\\n...'
+        Create:  action='create', path='journal/2026-02-23.md', title='Sunday', tags=['journal'],
+                 content='## Morning\\nCycled in -6°C...\\n## Evening\\n...'
         Read section:  action='read', path='plans/cabin-weekend.md', section='Weekend Cabin Trip'
         Table of Contents: action='toc', path='huge-note.md' (Returns headings and their sizes)
         Append:  action='update', path='watching/watchlist.md', mode='append',
@@ -151,10 +154,12 @@ def folio(
             case "create":
                 if not path:
                     return {"error": "path is required for create"}
+                if title is None:
+                    return {"error": "title is required for create"}
                 if content is None:
                     return {"error": "content is required for create"}
                 try:
-                    note = Note(path=path, content=content, tags=tags or [])
+                    note = Note(path=path, title=title, content=content, tags=tags or [])
                     result = backend.create(note)
                     return _note_response(result, status="created")
                 except FileExistsError:
@@ -196,13 +201,14 @@ def folio(
                     return {"error": f"Invalid mode: {update_mode}. Use replace, append, prepend, or section."}
                 if update_mode == "section" and not target:
                     return {"error": "target (heading name) is required for section mode"}
-                if content is None and tags is None:
-                    return {"error": "content or tags required for update"}
+                if content is None and tags is None and title is None:
+                    return {"error": "content, title, or tags required for update"}
                 if update_mode == "section" and content is None:
                     return {"error": "content is required for section mode"}
                 try:
                     result = backend.update(
                         path=path,
+                        title=title,
                         content=content,
                         mode=update_mode,
                         target=target,

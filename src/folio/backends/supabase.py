@@ -45,6 +45,7 @@ class SupabaseBackend(FolioBackend):
                         mode=kwargs.get("mode", "replace"),
                         target=kwargs.get("target"),
                         tags=kwargs.get("tags"),
+                        title=kwargs.get("title"),
                     )
                 elif operation == "delete":
                     self.notion.delete(kwargs["path"])
@@ -149,7 +150,7 @@ class SupabaseBackend(FolioBackend):
         data = {
             "content": updated_note.content,
             "tags": updated_note.tags,
-            "title": updated_note.title, # Re-derive in case frontmatter changed
+            "title": updated_note.title,
             "size_tokens": updated_note.size_tokens,
             "sync_status": "pending_push" if self.sync_engine else "synced",
             "updated_at": updated_note.updated.isoformat()
@@ -157,7 +158,7 @@ class SupabaseBackend(FolioBackend):
         
         res = self.client.table("notes").update(data).eq("path", path).execute()
         result = self._row_to_note(res.data[0])
-        self._push_to_notion("update", path=path, content=content, mode=mode, target=target, tags=tags)
+        self._push_to_notion("update", path=path, content=content, mode=mode, target=target, tags=tags, title=title)
         return result
 
     def delete(self, path: str) -> None:

@@ -115,13 +115,14 @@ class LocalBackend(FolioBackend):
 
         return Note(
             path=path,
+            title=post.metadata.get("title", ""),
             content=post.content,
             tags=post.metadata.get("tags", []),
             created=_parse_dt(post.metadata.get("created")),
             updated=_parse_dt(post.metadata.get("updated")),
             metadata={
                 k: v for k, v in post.metadata.items()
-                if k not in ("tags", "created", "updated")
+                if k not in ("title", "tags", "created", "updated")
             },
         )
 
@@ -131,11 +132,13 @@ class LocalBackend(FolioBackend):
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         post = frontmatter.Post(note.content)
+        post.metadata["title"] = note.title
         post.metadata["tags"] = note.tags
         post.metadata["created"] = note.created.isoformat()
         post.metadata["updated"] = note.updated.isoformat()
         for k, v in note.metadata.items():
-            post.metadata[k] = v
+            if k != "title":
+                post.metadata[k] = v
 
         with open(filepath, "wb") as f:
             frontmatter.dump(post, f)
@@ -213,10 +216,11 @@ class LocalBackend(FolioBackend):
     def update(
         self,
         path: str,
-        content: str | None,                    
+        content: str | None = None,
         mode: str = "replace",
         target: str | None = None,
         tags: List[str] | None = None,
+        title: str | None = None,
     ) -> Note:
         note = self._read_file(path)
         now = datetime.now(timezone.utc)
@@ -226,12 +230,15 @@ class LocalBackend(FolioBackend):
                 new_content = content if content is not None else note.content
             case "append":
                 new_content = note.content + "\n" + content if content is not None else note.content  # ← guarded
+            case "prepend":
+                new_content = content + "\n\n" + note.content if content is not None else note.content
             case "section":
                 new_content = replace_section(note.content, target, content)
             case _:
                 raise ValueError(f"Invalid mode: {mode}")
 
         updated = note.model_copy(update={
+            "title": title if title is not None else note.title,
             "content": new_content,
             "updated": now,
             "tags": tags if tags is not None else note.tags,

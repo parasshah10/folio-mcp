@@ -23,10 +23,11 @@ class FolioBackend(ABC):
     def update(
         self,
         path: str,
-        content: str | None,
+        content: str | None = None,
         mode: str = "replace",
         target: str | None = None,
         tags: list[str] | None = None,
+        title: str | None = None,
     ) -> "Note": ...
 
     @abstractmethod
