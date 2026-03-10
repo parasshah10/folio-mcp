@@ -128,6 +128,7 @@ class SupabaseBackend(FolioBackend):
         mode: str = "replace",
         target: str | None = None,
         tags: List[str] | None = None,
+        title: str | None = None,
     ) -> Note:
         note = self.read(path)
         
@@ -144,6 +145,7 @@ class SupabaseBackend(FolioBackend):
                 raise ValueError(f"Invalid mode: {mode}")
 
         updated_note = note.model_copy(update={
+            "title": title if title is not None else note.title,
             "content": new_content,
             "tags": tags if tags is not None else note.tags,
             "updated": datetime.now(timezone.utc)
@@ -174,12 +176,12 @@ class SupabaseBackend(FolioBackend):
         
         self._push_to_notion("delete", path=path)
 
-    def move(self, source: str, target: str) -> Note:
+    def move(self, source: str, target: str, title: str | None = None) -> Note:
         from folio.models import evaluate_move_title
 
         note = self.read(source)
         new_folder = "/".join(target.split("/")[:-1]) if "/" in target else ""
-        new_title = evaluate_move_title(source, note.title, target)
+        new_title = title if title is not None else evaluate_move_title(source, note.title, target)
         
         data = {
             "path": target,

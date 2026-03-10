@@ -197,9 +197,11 @@ class SyncEngine:
                         existing = self.client.table('notes').select('id, path, title, sync_status').eq('path', derived_path).execute()
 
                     # Don't overwrite notes with pending local changes
-                    if existing.data and existing.data[0].get('sync_status') == 'pending_push':
-                        logger.debug(f"SyncEngine: Skipping pull for {derived_path} due to pending local changes.")
-                        continue
+                    if existing.data:
+                        current_status = existing.data[0].get('sync_status')
+                        if current_status in ('pending_push', 'pending_delete'):
+                            logger.debug(f"SyncEngine: Skipping pull for {derived_path} due to pending local state ({current_status}).")
+                            continue
                     
                     data = {
                         'path': derived_path,
